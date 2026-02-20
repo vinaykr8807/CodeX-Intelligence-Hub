@@ -1,0 +1,21 @@
+# Install PyTorch first (Windows CPU version)
+# Run: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Core dependencies
+faiss-cpu==1.7.4
+pandas==2.0.3
+sentence-transformers==2.2.2
+numpy==1.24.3
+
+# LLM API
+groq==0.4.2
+
+# FastAPI
+fastapi==0.109.0
+uvicorn==0.27.0
+python-multipart==0.0.6
+
+# Utilities
+requests==2.31.0
+python-dotenv==1.0.0
+schedule==1.2.0
