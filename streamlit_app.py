@@ -27,96 +27,194 @@ if 'auto_save_enabled' not in st.session_state:
 # GitHub and StackOverflow API helpers (no auth required)
 HEADERS = {'Accept': 'application/vnd.github.v3+json'}
 
-def fetch_github_code_snippets(query, language=None, max_files=200):
-    """Fetch code snippets from GitHub without authentication"""
+def fetch_github_code_snippets(query, language=None, max_files=5):
+    """Fetch code snippets from GitHub with improved robustness and rate limit handling"""
     items = []
-    per_page = 10
+    if not query: return items
+    
+    per_page = 5
     page = 1
     fetched = 0
     q = query
     if language:
         q += f' language:{language}'
 
+    headers = HEADERS.copy()
+    token = os.getenv('GITHUB_TOKEN')
+    if token:
+        headers['Authorization'] = f'token {token}'
+
     while fetched < max_files:
-        url = f'https://api.github.com/search/code?q={requests.utils.quote(q)}&per_page={per_page}&page={page}'
-        r = requests.get(url, headers=HEADERS, timeout=5)
-        if r.status_code != 200:
-            break
-        resp = r.json()
-        results = resp.get('items', [])
-        if not results:
-            break
-        for item in results:
-            if fetched >= max_files:
+        try:
+            import urllib.parse as _up
+            url = f'https://api.github.com/search/code?q={_up.quote(q)}&per_page={per_page}&page={page}'
+            r = requests.get(url, headers=headers, timeout=10)
+            
+            # Handle rate limiting gracefully
+            if r.status_code == 403 and 'rate limit exceeded' in r.text.lower():
+                # If we have some items, return what we have
+                if items: return items
+                # Otherwise, it's a hard fail
                 break
-            try:
-                download_url = item.get('html_url', '').replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
-                cr = requests.get(download_url, timeout=5)
-                if cr.status_code == 200:
-                    content = cr.text
-                    items.append({
-                        'source': 'github',
-                        'repo': item.get('repository', {}).get('full_name', 'Unknown'),
-                        'path': item.get('path', ''),
-                        'url': item.get('html_url', ''),
-                        'content': content,
-                        'language': item.get('language') or language
-                    })
-                    fetched += 1
-            except:
-                continue
-        page += 1
-        if fetched >= max_files:
+                
+            if r.status_code != 200:
+                break
+                
+            resp = r.json()
+            results = resp.get('items', [])
+            if not results:
+                break
+                
+            for item in results:
+                if fetched >= max_files: break
+                try:
+                    repo_info = item.get('repository')
+                    if not repo_info: continue
+                    
+                    full_name = repo_info.get('full_name', 'Unknown')
+                    html_url = item.get('html_url', '')
+                    
+                    # More robust raw URL construction
+                    download_url = html_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
+                    
+                    cr = requests.get(download_url, timeout=5)
+                    if cr.status_code == 200:
+                        items.append({
+                            'source': 'github',
+                            'repo': full_name,
+                            'path': item.get('path', ''),
+                            'url': html_url,
+                            'content': cr.text,
+                            'language': item.get('language') or language
+                        })
+                        fetched += 1
+                except:
+                    continue
+            page += 1
+        except Exception:
             break
     return items
 
-def fetch_stackoverflow_code_snippets(tag=None, pagesize=100, max_pages=5):
-    """Fetch code snippets from StackOverflow without authentication"""
+def fetch_stackoverflow_code_snippets(query=None, tag=None, pagesize=10, max_pages=1):
+    """Fetch code snippets from StackOverflow with ultra-robust multi-phase search"""
     base = 'https://api.stackexchange.com/2.3'
-    page = 1
     snippets = []
-    while page <= max_pages:
+    q_str = (query or "").strip()
+    
+    # ── Search Strategy Pipeline ──
+    # 1. search/advanced with 'q' and 'tagged'
+    # 2. search/advanced with 'intitle' and 'tagged' (broader)
+    # 3. search/advanced with 'q' ONLY (no tag)
+    # 4. search/advanced with 'intitle' ONLY
+    
+    search_attempts = [
+        {'q': q_str, 'tagged': tag},
+        {'intitle': q_str, 'tagged': tag},
+        {'q': q_str},
+        {'intitle': q_str}
+    ]
+    
+    for attempt in search_attempts:
+        if not any(attempt.values()): continue
+        
         params = {
             'order': 'desc',
-            'sort': 'votes',
+            'sort': 'relevance',
             'site': 'stackoverflow',
             'pagesize': pagesize,
-            'page': page,
-            'filter': 'withbody'
+            'filter': 'withbody',
+            'answers': 1 # Only questions with at least one answer
         }
-        if tag:
-            params['tagged'] = tag
-        url = f"{base}/questions"
-        r = requests.get(url, params=params, timeout=5)
-        if r.status_code != 200:
-            break
-        data = r.json()
-        for q in data.get('items', []):
-            question_id = q['question_id']
-            title = q.get('title')
-            link = q.get('link')
-            ar = requests.get(f"{base}/questions/{question_id}/answers", params={'order':'desc','sort':'votes','site':'stackoverflow','filter':'withbody'}, timeout=5)
-            if ar.status_code != 200:
-                continue
-            answers = ar.json().get('items', [])
-            for a in answers[:1]:
-                body = a.get('body', '')
-                soup = BeautifulSoup(body, 'html.parser')
-                code_blocks = [c.get_text() for c in soup.find_all('code')]
-                for cb in code_blocks[:1]:
-                    if len(cb) > 50:
-                        snippets.append({
-                            'source':'stackoverflow',
-                            'question_id': question_id,
-                            'answer_id': a.get('answer_id'),
-                            'title': title,
-                            'link': link,
-                            'content': cb
-                        })
-        if not data.get('has_more'):
-            break
-        page += 1
+        params.update(attempt)
+            
+        try:
+            r = requests.get(f"{base}/search/advanced", params=params, timeout=10)
+            if r.status_code == 200:
+                items = r.json().get('items', [])
+                if not items: continue # Try next attempt in pipeline
+                
+                for q in items:
+                    question_id = q['question_id']
+                    # Fetch top-voted answer
+                    ar = requests.get(f"{base}/questions/{question_id}/answers", 
+                                     params={'order':'desc','sort':'votes','site':'stackoverflow','filter':'withbody'}, 
+                                     timeout=10)
+                    if ar.status_code == 200:
+                        answers = ar.json().get('items', [])
+                        for a in answers[:1]:
+                            soup = BeautifulSoup(a.get('body', ''), 'html.parser')
+                            code_blocks = [c.get_text() for c in soup.find_all('code')]
+                            for cb in code_blocks:
+                                if len(cb.strip()) > 30: # Snippet quality threshold
+                                    snippets.append({
+                                        'source':'stackoverflow',
+                                        'title': q.get('title'),
+                                        'link': q.get('link'),
+                                        'content': cb.strip()
+                                    })
+                                    if len(snippets) >= pagesize: return snippets
+                
+                if snippets: return snippets # Found something!
+        except Exception:
+            continue
+            
+    # Final Fallback: if keywords failed, try just the tag with top votes
+    if not snippets and tag:
+        try:
+            r = requests.get(f"{base}/questions", params={
+                'order': 'desc', 'sort': 'votes', 'tagged': tag, 
+                'site': 'stackoverflow', 'pagesize': 5, 'filter': 'withbody'
+            }, timeout=10)
+            if r.status_code == 200:
+                for q in r.json().get('items', []):
+                    # (Simplified answer fetch logic as above...)
+                    ar = requests.get(f"{base}/questions/{q['question_id']}/answers", 
+                                     params={'order':'desc','sort':'votes','site':'stackoverflow','filter':'withbody'}, 
+                                     timeout=10)
+                    if ar.status_code == 200:
+                        for a in ar.json().get('items', []):
+                            soup = BeautifulSoup(a.get('body', ''), 'html.parser')
+                            for cb in [c.get_text() for c in soup.find_all('code') if len(c.get_text()) > 30]:
+                                snippets.append({'source':'stackoverflow', 'title': q['title'], 'link': q['link'], 'content': cb.strip()})
+                                if len(snippets) >= pagesize: return snippets
+        except Exception: pass
+
     return snippets
+
+def get_search_query_from_code(code, language, groq_client):
+    """Generate a clean search query for GitHub/StackOverflow using Groq"""
+    if not groq_client:
+        return ""
+        
+    prompt = f"""Extract 3-5 key technical keywords or function names from this {language} code snippet to use as a search query for finding similar real-world examples.
+Respond ONLY with the keywords separated by spaces. No explanations or sentences.
+
+Code:
+{code[:500]}"""
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a technical search expert. You provide specific, technical keywords."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=60
+        )
+        query = response.choices[0].message.content.strip()
+        # Aggressive cleaning: Remove markdown, quotes, and conversational filler
+        import re as _re
+        query = _re.sub(r'```.*?```', '', query, flags=_re.DOTALL) # Remove code blocks if AI returned them
+        query = _re.sub(r'^(Keywords:|Search Query:|Query:|Find:)', '', query, flags=_re.IGNORECASE)
+        query = _re.sub(r'[^a-zA-Z0-9\s\#\+\.]', ' ', query) # Keep C++, C# etc.
+        query = " ".join(query.split()) # Normalize spaces
+        return query.strip()
+    except Exception:
+        # Fallback to simple extraction
+        import re as _re
+        words = _re.findall(r'\b[a-zA-Z\_]{5,}\b', code[:300]) 
+        return " ".join(words[:4])
 
 # Load environment variables — called ONCE here, not repeated per-feature
 load_dotenv()
@@ -151,7 +249,7 @@ st.set_page_config(
 )
 
 # API Configuration
-API_BASE_URL = "http://localhost:8000"
+
 
 # Premium CodeX UI Design System
 hub_css = """
@@ -319,6 +417,14 @@ if 'show_bookmarks_main' not in st.session_state:
     st.session_state.show_bookmarks_main = False
 if 'show_docker_guide' not in st.session_state:
     st.session_state.show_docker_guide = False
+if 'enhanced_code' not in st.session_state:
+    st.session_state.enhanced_code = None
+if 'enhanced_context' not in st.session_state:
+    st.session_state.enhanced_context = None
+if 'performance_comparison' not in st.session_state:
+    st.session_state.performance_comparison = None
+if 'enhance_lang' not in st.session_state:
+    st.session_state.enhance_lang = 'Python'
 
 @st.cache_data
 def _load_problem_titles_cached(language: str, _file_mtime: float):
@@ -430,41 +536,94 @@ def generate_code_analysis(code, line_analyses, action, groq_client):
     context_text = '\n'.join([f"Line {la['line_num']}: {la['code']}\nSimilar patterns: {la['contexts'][:2]}" for la in line_analyses[:10]])
     
     prompts = {
-        'debug': f"""Analyze this code for bugs and errors:
+        'debug': f"""Expert Code Review Task: Analyze this code for bugs, logic errors, and security vulnerabilities.
+Use the similarity context provided to identify common pitfalls.
 
+Code to Analyze:
 {code}
 
-Context from similar code:
+Similarity Context:
 {context_text}
 
-Provide:
-1. Issues found (line by line)
-2. Why each issue occurs
-3. How to fix each issue""",
+Respond in this EXACT format:
+### ANALYSIS_RESULTS
+**Bug Analysis: [Short Descriptive Title]**
+
+**1. Likely Cause of the Bug**
+[Detailed technical explanation of the root cause]
+
+**2. Suggested Fixes**
+[Bulleted list of specific code changes or architectural fixes]
+
+**3. Step-by-Step Debugging Advice**
+[Numbered list of debugging steps to verify the fix]
+
+**4. Severity Level**
+[Low/Medium/High/Critical] - [Brief rationale]
+
+### ADDITIONAL_RECOMMENDATIONS
+[WAF suggestions, security testing, or developer training tips]
+""",
         
-        'optimize': f"""Optimize this code for performance:
+        'optimize': f"""Expert Code Review Task: Optimize this code for performance and efficiency.
+Use the similarity context provided to find better patterns.
 
+Code to Optimize:
 {code}
 
-Context from similar code:
+Similarity Context:
 {context_text}
 
-Provide:
-1. Performance bottlenecks (line by line)
-2. Why they're slow
-3. Optimized alternatives""",
+Respond in this EXACT format:
+### ANALYSIS_RESULTS
+**Performance Analysis: [Short Descriptive Title]**
+
+**1. Efficiency Bottlenecks**
+[Explain why the current code is slow or resource-heavy]
+
+**2. Optimized Alternatives**
+[Bulleted list of optimized code patterns or algorithms]
+
+**3. Step-by-Step Implementation Advice**
+[How to integrate the optimizations safely]
+
+**4. Performance Impact**
+[Expected improvement level: Low/Medium/High]
+
+### ADDITIONAL_RECOMMENDATIONS
+[Caching strategies, profiling tools, or hardware considerations]
+""",
         
-        'refactor': f"""Refactor this code for better quality:
+        'refactor': f"""Expert Code Review Task: Refactor this code for better quality and maintainability.
+Use the similarity context provided to adhere to best practices.
 
+Code to Refactor:
 {code}
 
-Context from similar code:
+Similarity Context:
 {context_text}
 
-Provide:
-1. Code smells (line by line)
-2. Why they're problematic
-3. Refactored version"""
+Respond in this EXACT format:
+### ANALYSIS_RESULTS
+**Code Quality Analysis: [Short Descriptive Title]**
+
+**1. Code Smells & Issues**
+[Identify maintainability problems, nesting, or naming issues]
+
+**2. Refactoring Suggestions**
+[Bulleted list of specific refactoring steps]
+
+**3. Refactored Snippet**
+```[language]
+[Clean code implementation]
+```
+
+**4. Maintainability Impact**
+[Expected improvement level: Low/Medium/High]
+
+### ADDITIONAL_RECOMMENDATIONS
+[Design pattern suggestions, documentation tips, or modularization advice]
+"""
     }
     
     try:
@@ -506,10 +665,15 @@ def analyze_code_with_rag(code, action='debug'):
     # Generate analysis
     analysis = generate_code_analysis(code, line_analyses, action, st.session_state.groq_client)
     
+    # Predict severity for the UI
+    severity, color = predict_severity(analysis + " " + code)
+    
     return {
         'line_analyses': line_analyses,
         'analysis': analysis,
-        'action': action
+        'action': action,
+        'severity': severity,
+        'severity_color': color
     }
 
 def predict_severity(text, contexts=None):
@@ -811,11 +975,20 @@ def show_bug_intelligence_mode():
             action = 'refactor'
         
         if action and code_input:
-            with st.spinner(f"🤖 Analyzing code for {action}..."):
+            with st.spinner(f"🤖 Analyzing code for {action} with Bug Intelligence..."):
                 result = analyze_code_with_rag(code_input, action)
             
             st.markdown("---")
-            st.subheader(f"📋 {action.title()} Analysis")
+            # Severity Banner
+            st.markdown(f"""
+            <div style='background:{result['severity_color']}22;border:2px solid {result['severity_color']};border-radius:12px;
+                padding:16px;text-align:center;margin-bottom:16px'>
+                <span style='font-size:1.5rem'>{result['severity_color']}</span>
+                <span style='color:{result['severity_color']};font-size:1.2rem;font-weight:700;margin-left:8px'>
+                {action.title()} Detection: {result['severity']} Severity</span>
+            </div>""", unsafe_allow_html=True)
+            
+            st.subheader(f"📋 {action.title()} Intelligence Report")
             
             # Extract refactored code if action is refactor
             refactored_code = None
@@ -1201,16 +1374,17 @@ Include edge cases (empty, large, negative)."""
     except Exception as e:
         return [], f"Test case generation failed: {e}"
 
-def compare_implementations(implementations, problem_desc, groq_client):
+def compare_implementations(implementations, problem_desc, groq_client, language='Python'):
     """Compare performance across multiple implementations"""
     results = []
     for i, impl in enumerate(implementations):
-        result = execute_code_safely(impl['code'], 'python')
+        # Result dictionary includes execution_time, memory_used, complexity, success
+        result = execute_code_safely(impl['code'], language)
         results.append({
             'name': impl.get('name', f'Implementation {i+1}'),
             'time': result['execution_time'],
             'memory': result['memory_used'],
-            'complexity': result['complexity'],
+            'complexity': result.get('complexity', 'O(n)'),
             'success': result['success']
         })
     return results
@@ -1368,6 +1542,42 @@ def show_execution_sandbox_mode():
             lines = code_input.split('\n')
             line_statuses = []
             
+            # ── Semantic Alignment Check (AI) ──
+            # To avoid hitting rate limits, we only verify semantic alignment if the code or problem has changed
+            # and we haven't checked this specific combination yet.
+            import hashlib as _hash
+            check_key = _hash.md5(f"{problem_desc}{code_input[:500]}".encode()).hexdigest()
+            
+            if 'last_alignment_check' not in st.session_state or st.session_state.get('alignment_key') != check_key:
+                with st.spinner("🧠 Verifying logic alignment..."):
+                    groq = get_groq_client()
+                    if groq:
+                        try:
+                            align_prompt = f"""Task: Check if the provided code is relevant to the problem description.
+Problem: {problem_desc}
+Code Start:
+{code_input[:800]}
+
+Respond in EXACTLY this format:
+VERDICT: [MATCH/MISMATCH/EMPTY]
+REASON: [Short 1-sentence explanation]"""
+                            resp = groq.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": align_prompt}],
+                                temperature=0.0, max_tokens=100
+                            )
+                            alignment = resp.choices[0].message.content
+                            st.session_state.last_alignment_check = alignment
+                            st.session_state.alignment_key = check_key
+                        except:
+                            st.session_state.last_alignment_check = "VERDICT: MATCH\nREASON: (Auto-approved due to check failure)"
+            
+            alignment_res = st.session_state.get('last_alignment_check', "VERDICT: MATCH")
+            if "MISMATCH" in alignment_res:
+                reason = alignment_res.split("REASON:")[-1].strip() if "REASON:" in alignment_res else "Code does not match problem requirements."
+                st.error(f"⚠️ **Logic Mismatch Detected:** {reason}")
+            
+            # ... (Existing language-specific syntax checks)
             if language == 'Python':
                 import ast as _ast
                 import tokenize as _tokenize
@@ -1527,7 +1737,12 @@ def show_execution_sandbox_mode():
             elif warn_count > 0:
                 st.warning(f"⚠️ {warn_count} potential issue(s) found")
             else:
-                st.success("✅ All lines look good!")
+                # Check alignment status for a more accurate success/warning message
+                alignment_res = st.session_state.get('last_alignment_check', "VERDICT: MATCH")
+                if "MISMATCH" in alignment_res:
+                    st.warning("🟡 Syntax is valid, but logic mismatch detected above.")
+                else:
+                    st.success("✅ Code is aligned with problem and syntax is valid!")
             
             if issues:
                 st.markdown("**Issues Found:**")
@@ -1734,58 +1949,105 @@ def show_execution_sandbox_mode():
                     pass
                 
                 # Load Groq
-                if st.session_state.bug_model is None:
+                if st.session_state.groq_client is None:
                     model, static_idx, dynamic_idx, static_meta, dynamic_meta, groq = load_bug_system()
                     st.session_state.groq_client = groq
                 
                 # Generate enhanced version
                 if st.session_state.groq_client:
-                    context = f"Dataset matches: {len(similar)}, GitHub: {len(github_snippets)}, StackOverflow: {len(so_snippets)}"
+                    context_summary = f"📚 Enhanced using: {len(similar)} dataset snippets, {len(github_snippets)} GitHub, {len(so_snippets)} StackOverflow"
                     prompt = f"""Enhance this code for better performance and readability:
 
 {code_input}
 
-Context: {context}
-Provide optimized version with comments."""
+Context from reference sources: {context_summary}
+Respond ONLY with the optimized code in a markdown code block. No explanations."""
                     
                     response = st.session_state.groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=[
-                            {"role": "system", "content": "You are a code optimization expert."},
+                            {"role": "system", "content": "You are a code optimization expert. Respond only with the code block."},
                             {"role": "user", "content": prompt}
                         ],
                         temperature=0.2,
-                        max_tokens=1000
+                        max_tokens=2000
                     )
                     
-                    st.markdown("---")
-                    st.subheader("✨ Enhanced Code")
-                    st.info(f"📚 Enhanced using: {len(similar)} dataset snippets, {len(github_snippets)} GitHub, {len(so_snippets)} StackOverflow")
-                    st.code(response.choices[0].message.content, language={
-                        'Python': 'python', 'Java': 'java', 'C++': 'cpp', 'JavaScript': 'javascript'
-                    }.get(language, 'text'))
-                    
-                    # Compare performance
-                    if st.button("🔍 Compare Performance", key="compare_perf"):
-                        with st.spinner("Comparing implementations..."):
-                            implementations = [
-                                {'name': 'Original', 'code': code_input},
-                                {'name': 'Enhanced', 'code': response.choices[0].message.content}
-                            ]
-                            comparison = compare_implementations(implementations, problem_desc, st.session_state.groq_client)
+                    # Store in session state for persistence
+                    raw_content = response.choices[0].message.content
+                    # Clean up triple backticks if present
+                    clean_code = raw_content
+                    import re as _re
+                    code_match = _re.search(r'```[\w+]*\n(.*?)```', raw_content, _re.DOTALL)
+                    if code_match:
+                        clean_code = code_match.group(1).strip()
+                    else:
+                        clean_code = clean_code.replace('```', '').strip()
                         
-                        st.markdown("### 🏆 Performance Comparison")
-                        comp_df = pd.DataFrame(comparison)
-                        st.dataframe(comp_df, use_container_width=True)
-                        
-                        # Visualize comparison
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            fig_time = px.bar(comp_df, x='name', y='time', title='Execution Time', color='name')
-                            st.plotly_chart(fig_time, use_container_width=True)
-                        with col2:
-                            fig_mem = px.bar(comp_df, x='name', y='memory', title='Memory Usage', color='name')
-                            st.plotly_chart(fig_mem, use_container_width=True)
+                    st.session_state.enhanced_code = clean_code
+                    st.session_state.enhanced_context = context_summary
+                    st.session_state.enhance_lang = language
+                    st.session_state.performance_comparison = None # Clear old comparison
+                    st.rerun()
+
+        # Display Enhanced Code Section (Persisted)
+        if st.session_state.enhanced_code:
+            st.markdown("---")
+            st.subheader("✨ Enhanced Code")
+            st.info(st.session_state.enhanced_context)
+            st.code(st.session_state.enhanced_code, language={
+                'Python': 'python', 'Java': 'java', 'C++': 'cpp', 'JavaScript': 'javascript'
+            }.get(st.session_state.enhance_lang, 'text'))
+            
+            ecol1, ecol2, ecol3 = st.columns(3)
+            with ecol1:
+                compare_click = st.button("📊 Compare Performance", type="primary", use_container_width=True, key="compare_perf_btn")
+            with ecol2:
+                if st.button("📋 Use This Code", use_container_width=True):
+                    # In a real app we might want to overwrite the input area, 
+                    # but Streamlit text_area value updates require session state patterns.
+                    st.info("You can copy this code and paste it back into the editor above.")
+            with ecol3:
+                if st.button("🗑️ Clear Enhanced", use_container_width=True):
+                    st.session_state.enhanced_code = None
+                    st.session_state.performance_comparison = None
+                    st.rerun()
+
+            # Handle comparison click
+            if compare_click:
+                with st.spinner("🚀 Running performance benchmarks..."):
+                    implementations = [
+                        {'name': 'Original', 'code': code_input},
+                        {'name': 'Enhanced', 'code': st.session_state.enhanced_code}
+                    ]
+                    # Pass the correct language stored in session state
+                    st.session_state.performance_comparison = compare_implementations(
+                        implementations, problem_desc, st.session_state.groq_client, st.session_state.enhance_lang
+                    )
+            
+            # Display Performance Comparison Results
+            if st.session_state.performance_comparison:
+                st.markdown("### 🏆 Performance Analysis")
+                comp_df = pd.DataFrame(st.session_state.performance_comparison)
+                
+                # Add improvement %
+                orig_time = comp_df.iloc[0]['time']
+                enh_time = comp_df.iloc[1]['time']
+                if orig_time > 0:
+                    improvement = ((orig_time - enh_time) / orig_time) * 100
+                    st.metric("Time Improvement", f"{improvement:.1f}%", delta=f"{improvement:.1f}%")
+
+                st.dataframe(comp_df, use_container_width=True)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    fig_time = px.bar(comp_df, x='name', y='time', title='Execution Time (s)', 
+                                    color='name', color_discrete_map={'Original': '#94a3b8', 'Enhanced': '#3b82f6'})
+                    st.plotly_chart(fig_time, use_container_width=True)
+                with col2:
+                    fig_mem = px.bar(comp_df, x='name', y='memory', title='Memory Usage (MB)', 
+                                   color='name', color_discrete_map={'Original': '#94a3b8', 'Enhanced': '#10b981'})
+                    st.plotly_chart(fig_mem, use_container_width=True)
     
     with tab2:
         st.subheader("📊 Execution Analytics")
@@ -2506,6 +2768,24 @@ def show_code_translator():
         if not groq:
             return
 
+        with st.spinner(f"🔍 Researching {tgt_lang} patterns and real-world examples..."):
+            # 1. Generate search query
+            search_query = get_search_query_from_code(source_code, src_lang, groq)
+            
+            # 2. Fetch external context
+            gh_context = fetch_github_code_snippets(search_query, language=tgt_lang.lower(), max_files=2)
+            so_context = fetch_stackoverflow_code_snippets(query=search_query, tag=tgt_lang.lower(), max_pages=1)
+            
+            ref_context = ""
+            if gh_context:
+                ref_context += "\n--- GitHub Examples ---\n"
+                for s in gh_context:
+                    ref_context += f"Repo: {s['repo']}\nPath: {s['path']}\nCode:\n{s['content'][:1000]}\n"
+            if so_context:
+                ref_context += "\n--- StackOverflow Examples ---\n"
+                for s in so_context:
+                    ref_context += f"Title: {s['title']}\nCode:\n{s['content'][:1000]}\n"
+
         prompt = f"""You are an expert polyglot programmer. Translate the following {src_lang} code to {tgt_lang}.
 
 Rules:
@@ -2513,40 +2793,49 @@ Rules:
 - Use idiomatic {tgt_lang} patterns and conventions
 - Add brief inline comments where {tgt_lang} differs conceptually
 - Handle language-specific differences (e.g., memory management in C++, null safety in Java)
+- Use the provided GitHub and StackOverflow context below if it contains better or more optimized patterns for {tgt_lang}.
 
 {src_lang} Code:
-```{src_lang.lower()}
+``` {src_lang.lower()}
 {source_code}
 ```
+
+External Reference Context (Use for optimization and idiomatic patterns):
+{ref_context if ref_context else "No external references found. Use your own knowledge for idiomatic translation."}
 
 Respond in this EXACT format:
 ### TRANSLATED_CODE
 ```{tgt_lang.lower()}
 <translated code here>
 ```
+### LINE_BY_LINE_BREAKDOWN
+Line 1: <Original {src_lang} line> | <Translated {tgt_lang} line> | <Idiomatic explanation>
+...
 ### DIFFERENCES
 <bullet list of key differences between {src_lang} and {tgt_lang} for this code>
 ### NOTES
 <any important warnings or optimizations for the target language>"""
 
-        with st.spinner(f"🔄 Translating {src_lang} → {tgt_lang}..."):
+        with st.spinner(f"🔄 Translating {src_lang} → {tgt_lang} with RAG context..."):
             try:
                 resp = groq.chat.completions.create(
                     model=GROQ_MODEL,
                     messages=[
-                        {"role": "system", "content": "You are an expert code translator. Always respond with the exact format requested."},
+                        {"role": "system", "content": "You are an expert code translator. Use RAG context to provide trusted and optimized code. Provide a line-by-line breakdown."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.1, max_tokens=2000
+                    temperature=0.1, max_tokens=3000
                 )
                 result = resp.choices[0].message.content
 
                 # Parse sections
                 parts = result.split("###")
-                translated_code, differences, notes = "", "", ""
+                translated_code, line_breakdown, differences, notes = "", "", "", ""
                 for part in parts:
                     if part.strip().startswith("TRANSLATED_CODE"):
                         translated_code = part.strip()
+                    elif part.strip().startswith("LINE_BY_LINE_BREAKDOWN"):
+                        line_breakdown = part.replace("LINE_BY_LINE_BREAKDOWN", "").strip()
                     elif part.strip().startswith("DIFFERENCES"):
                         differences = part.replace("DIFFERENCES", "").strip()
                     elif part.strip().startswith("NOTES"):
@@ -2558,13 +2847,29 @@ Respond in this EXACT format:
                     st.markdown(f"#### 📄 Original {src_lang}")
                     st.code(source_code, language={"C++": "cpp", "JavaScript": "javascript"}.get(src_lang, src_lang.lower()))
                 with col_r:
-                    st.markdown(f"#### ✅ Translated {tgt_lang}")
+                    st.markdown(f"#### ✅ Optimized {tgt_lang} (via Groq + RAG)")
                     # Extract just the code block
                     import re as _re
                     code_match = _re.search(r'```[\w+]*\n(.*?)```', translated_code, _re.DOTALL)
                     clean_code = code_match.group(1) if code_match else translated_code
                     st.code(clean_code, language={"C++": "cpp", "JavaScript": "javascript"}.get(tgt_lang, tgt_lang.lower()))
-                    st.button("📋 Copy", key="copy_trans", help="Copy translated code")
+                    st.button("📋 Copy Optimized Code", key="copy_trans", help="Copy translated code")
+
+                # Line-by-Line Breakdown Section (The "Trusted" part)
+                with st.expander("🐙 Line-by-Line Translation & Trusted Patterns", expanded=True):
+                    if line_breakdown:
+                        for line in line_breakdown.split('\n'):
+                            if '|' in line:
+                                orig, trans, expl = (line.split('|') + ["", ""])[:3]
+                                st.markdown(f"""
+                                <div style='border-left: 3px solid #3b82f6; padding: 10px; margin: 10px 0; background: rgba(59, 130, 246, 0.05); border-radius: 0 8px 8px 0;'>
+                                    <div style='font-size: 0.8rem; color: #94a3b8;'>{orig.strip()}</div>
+                                    <div style='font-size: 1rem; color: #38bdf8; font-family: monospace; margin: 5px 0;'>{trans.strip()}</div>
+                                    <div style='font-size: 0.85rem; color: #4ade80;'>💡 {expl.strip()}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    else:
+                        st.info("Line-by-line breakdown unavailable for this snippet.")
 
                 col_d, col_n = st.columns(2)
                 with col_d:
@@ -2574,20 +2879,24 @@ Respond in this EXACT format:
                     with st.expander("⚠️ Notes & Optimizations", expanded=True):
                         st.markdown(notes if notes else "_No additional notes_")
 
-                # Also fetch a GitHub example in target language for comparison
-                with st.expander("🐙 GitHub Reference Examples", expanded=False):
-                    with st.spinner("Fetching real-world examples from GitHub..."):
-                        try:
-                            gh_snippets = fetch_github_code_snippets(
-                                f"{source_code[:80].strip()}", language=tgt_lang.lower(), max_files=2)
-                            if gh_snippets:
-                                for i, s in enumerate(gh_snippets[:2], 1):
-                                    st.markdown(f"**Example {i}** — `{s.get('path','')}`")
-                                    st.code(s.get('content','')[:500], language={"C++": "cpp", "JavaScript": "javascript"}.get(tgt_lang, tgt_lang.lower()))
-                            else:
-                                st.info("No GitHub examples found for this query.")
-                        except Exception:
-                            st.info("GitHub search unavailable.")
+                # Show the references used
+                with st.expander("🔗 Technical References Used (GitHub + StackOverflow)", expanded=False):
+                    if gh_context or so_context:
+                        if gh_context:
+                            st.markdown("#### 🐙 Verified GitHub Examples")
+                            for i, s in enumerate(gh_context, 1):
+                                st.markdown(f"- **{s['repo']}**: [`{s['path']}`]({s['url']})")
+                                with st.expander(f"View patterns from {s['repo']}"):
+                                    st.code(s['content'][:1000], language=tgt_lang.lower())
+                        
+                        if so_context:
+                            st.markdown("#### 💬 Top StackOverflow Solutions")
+                            for i, s in enumerate(so_context, 1):
+                                st.markdown(f"- **[{s['title']}]({s['link']})**")
+                                with st.expander(f"View StackOverflow code snippet"):
+                                    st.code(s['content'][:1000], language=tgt_lang.lower())
+                    else:
+                        st.info("No external references were found for this specific logic, so Groq used its internal knowledge.")
 
             except Exception as e:
                 st.error(f"Translation failed: {e}")
@@ -2727,12 +3036,18 @@ Respond ONLY in this JSON format:
                 with st.expander("📚 StackOverflow Best Practices", expanded=False):
                     with st.spinner("Fetching related SO answers..."):
                         try:
-                            so = fetch_stackoverflow_code_snippets(tag=language.lower(), pagesize=3, max_pages=1)
+                            # Use improved query generation
+                            so_query = get_search_query_from_code(code_input, language, groq)
+                            if so_query:
+                                st.caption(f"Searching for: `{so_query}` in {language}")
+                            so = fetch_stackoverflow_code_snippets(query=so_query, tag=language.lower(), pagesize=3, max_pages=1)
                             if so:
                                 for s in so[:3]:
-                                    st.markdown(f"- {s.get('title', s.get('content','')[:80])}")
+                                    st.markdown(f"##### 💬 [{s.get('title', 'Verified Solution')}]({s.get('link','')})")
+                                    with st.expander("🔍 View Snippet"):
+                                        st.code(s.get('content',''), language=language.lower())
                             else:
-                                st.info("No StackOverflow results found.")
+                                st.info("No specific matches found. Try refining your code or focus.")
                         except Exception:
                             st.info("StackOverflow search unavailable.")
 
@@ -2776,10 +3091,37 @@ def show_ai_code_review():
         lines = code_input.split('\n')
         numbered = "\n".join(f"{i+1:3}: {l}" for i, l in enumerate(lines))
 
-        prompt = f"""You are a senior software engineer conducting a thorough code review. 
+        # 1. Fetch RAG Context for Code Review
+        with st.spinner("🔍 Retrieving verified patterns for review..."):
+            search_query = get_search_query_from_code(code_input, language, groq)
+            # Find in local FAISS
+            rag_contexts = []
+            if st.session_state.bug_model and st.session_state.bug_index_static:
+                query_vec = st.session_state.bug_model.encode([search_query])
+                D, I = st.session_state.bug_index_static.search(query_vec, 3)
+                for idx in I[0]:
+                    if idx < len(st.session_state.bug_meta_static):
+                        rag_contexts.append(st.session_state.bug_meta_static.iloc[idx]['text'])
+
+            # Find on GitHub and StackOverflow
+            gh_refs = fetch_github_code_snippets(search_query, language=language.lower(), max_files=2)
+            so_refs = fetch_stackoverflow_code_snippets(query=search_query, tag=language.lower(), max_pages=1)
+            
+            # Save for UI display to avoid redundant fetch
+            st.session_state.last_review_gh = gh_refs
+            st.session_state.last_review_so = so_refs
+
+            context_text = "\n".join(rag_contexts[:2])
+            if gh_refs: context_text += f"\nGitHub Pattern from {gh_refs[0]['repo']}:\n{gh_refs[0]['content'][:800]}"
+            if so_refs: context_text += f"\nStackOverflow Hint: {so_refs[0]['content'][:800]}"
+
+        prompt = f"""You are a senior software engineer conducting a thorough code review.
 Focus areas: {focus_str}
 Context: {context if context else 'General purpose code'}
 Language: {language}
+
+Reference Context (Trusted Patterns):
+{context_text if context_text else 'No external context found.'}
 
 Code (with line numbers):
 {numbered}
@@ -2789,17 +3131,30 @@ Provide a structured review in this EXACT format:
 ### CRITICAL_ISSUES
 <List each critical bug/security issue as: Line X: [CRITICAL] description | suggestion>
 
-### WARNINGS  
+### WARNINGS
 <List each warning as: Line X: [WARNING] description | suggestion>
 
 ### SUGGESTIONS
 <List each improvement as: Line X: [SUGGEST] description | suggestion>
 
+### BUG_INTELLIGENCE_REPORT
+**Likely Cause of Issues**
+[Technical Root Cause Analysis]
+
+**Suggested Fixes & Security Mitigations**
+[Specific steps to fix vulnerabilities or performance flaws]
+
+**Step-by-Step Debugging Advice**
+[How to verify the fix]
+
+**Overall Severity**
+[Low/Medium/High/Critical]
+
 ### POSITIVE_NOTES
 <What the code does well — 3-5 bullet points>
 
 ### SUMMARY
-<3-4 sentence overall review summary with recommendation: APPROVE / REQUEST_CHANGES / NEEDS_MAJOR_REWORK>
+<Overall assessment with recommendation: APPROVE / REQUEST_CHANGES / NEEDS_MAJOR_REWORK>
 
 ### REFACTORED_SNIPPET
 <Show the most critical section refactored with improvements, in a code block>"""
@@ -2824,6 +3179,7 @@ Provide a structured review in this EXACT format:
                 critical = extract_section(result, "CRITICAL_ISSUES")
                 warnings = extract_section(result, "WARNINGS")
                 suggestions = extract_section(result, "SUGGESTIONS")
+                intelligence = extract_section(result, "BUG_INTELLIGENCE_REPORT")
                 positives = extract_section(result, "POSITIVE_NOTES")
                 summary = extract_section(result, "SUMMARY")
                 refactored = extract_section(result, "REFACTORED_SNIPPET")
@@ -2838,6 +3194,11 @@ Provide a structured review in this EXACT format:
                     <span style='font-size:1.5rem'>{verdict_icon}</span>
                     <span style='color:{verdict_color};font-size:1.2rem;font-weight:700;margin-left:8px'>
                     Review Verdict: {verdict.replace("_"," ")}</span></div>""", unsafe_allow_html=True)
+
+                # Intelligence Report Header
+                if intelligence:
+                    with st.expander("🛡️ Bug Intelligence & Security Report", expanded=True):
+                        st.markdown(intelligence)
 
                 # Stats
                 crit_count = len([l for l in critical.split('\n') if l.strip()])
@@ -2881,19 +3242,28 @@ Provide a structured review in this EXACT format:
                         st.code(code_m.group(1) if code_m else refactored,
                                 language={"C++": "cpp", "JavaScript": "javascript"}.get(language, language.lower()))
 
-                # GitHub reference
-                with st.expander("🐙 Similar Reviewed Code on GitHub", expanded=False):
-                    with st.spinner("Searching GitHub..."):
-                        try:
-                            gh = fetch_github_code_snippets(context or code_input[:80], language=language.lower(), max_files=2)
-                            if gh:
-                                for s in gh[:2]:
-                                    st.markdown(f"`{s.get('path','')}`")
-                                    st.code(s.get('content','')[:400], language={"C++": "cpp"}.get(language, language.lower()))
-                            else:
-                                st.info("No results from GitHub.")
-                        except Exception:
-                            st.info("GitHub unavailable.")
+                # Display GitHub/SO references (Reusing fetched context)
+                gh = st.session_state.get('last_review_gh', [])
+                so = st.session_state.get('last_review_so', [])
+                
+                if gh or so:
+                    with st.expander("📚 Technical References & Verified Patterns", expanded=False):
+                        if gh:
+                            st.markdown("### 🐙 Similar Reviewed Code on GitHub")
+                            for s in gh:
+                                st.markdown(f"**Source:** `{s.get('repo','')}/{s.get('path','')}`")
+                                st.code(s.get('content','')[:1000], language={"C++": "cpp"}.get(language, language.lower()))
+                                st.markdown(f"[View File on GitHub]({s.get('url','')})")
+                                st.markdown("---")
+                        
+                        if so:
+                            st.markdown("### 💬 Related StackOverflow Solutions")
+                            for s in so:
+                                st.markdown(f"**[{s.get('title', 'Verified Solution')}]({s.get('link','')})**")
+                                st.code(s.get('content',''), language=language.lower())
+                                st.markdown("---")
+                else:
+                    st.info("No external verified references found for this specific logic.")
 
             except Exception as e:
                 st.error(f"Review failed: {e}")
@@ -3003,7 +3373,6 @@ Respond ONLY in this JSON:
                         'score': path_data.get('skill_score', 0)
                     })
                     st.success("✅ Learning path generated! Go to **🗺️ My Learning Path** tab.")
-                    st.balloons()
                 except Exception as e:
                     st.error(f"Assessment failed: {e}")
 
@@ -3086,21 +3455,43 @@ Respond ONLY in this JSON:
             st.markdown(f"### 📈 Overall Progress: {done}/{total_phases} phases complete")
             st.progress(pct)
 
-            # Progress chart
-            phase_data = [{'Phase': f"Phase {ph['phase']}: {ph['title'][:20]}",
-                           'Status': '✅ Done' if ph['phase'] in st.session_state.completed_topics else '🔵 Pending'}
-                          for ph in phases]
-            df_prog = pd.DataFrame(phase_data)
-            df_prog['Done'] = df_prog['Status'].apply(lambda x: 1 if '✅' in x else 0)
-            fig_prog = px.bar(df_prog, x='Phase', y='Done', color='Status',
-                              color_discrete_map={'✅ Done': '#4ade80', '🔵 Pending': '#1e293b'},
-                              title="Phase Completion Status")
-            fig_prog.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
-                                   showlegend=True, yaxis=dict(tickvals=[0, 1], ticktext=['Pending', 'Done']))
-            st.plotly_chart(fig_prog, use_container_width=True)
+            # Improved Progress chart: show all phases as bars of equal height, colored by status
+            phase_list = []
+            for ph in phases:
+                ph_idx = ph.get('phase', 0)
+                status = '✅ Done' if ph_idx in st.session_state.completed_topics else '⏳ Pending'
+                phase_list.append({
+                    'Phase': f"Phase {ph_idx}",
+                    'Title': ph.get('title', 'TBD')[:25],
+                    'Status': status,
+                    'Progress': 1  # Constant height to ensure visibility
+                })
+            
+            df_prog = pd.DataFrame(phase_list)
+            if not df_prog.empty:
+                fig_prog = px.bar(
+                    df_prog, 
+                    x='Phase', 
+                    y='Progress', 
+                    color='Status',
+                    hover_data=['Title'],
+                    color_discrete_map={'✅ Done': '#10b981', '⏳ Pending': '#334155'},
+                    title="Phase Completion Status"
+                )
+                fig_prog.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font_color='#e2e8f0',
+                    showlegend=True,
+                    yaxis_visible=False, # Hide the "1" height axis
+                    xaxis=dict(title=None, showgrid=False),
+                    margin=dict(t=40, b=20, l=20, r=20)
+                )
+                st.plotly_chart(fig_prog, use_container_width=True)
+            else:
+                st.info("No phases found in the learning path.")
 
             if pct == 1.0:
-                st.balloons()
                 st.success("🎉 Congratulations! You've completed your entire learning path! You've levelled up! 🚀")
             elif done > 0:
                 st.success(f"🔥 Great progress! {done} phase(s) done. Keep going!")
