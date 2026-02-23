@@ -939,24 +939,14 @@ def show_bug_intelligence_mode():
         st.subheader("📝 Paste Your Code")
         
         # C. Voice Input
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            code_input = st.text_area(
-                "Enter your code here:",
-                height=300,
-                placeholder="def example():\n    # Your code here\n    pass",
-                value=st.session_state.get('voice_input', '')
-            )
-        with col2:
-            st.markdown("### 🎤 Voice")
-            voice_input_component()
-            if st.button("🔖 Bookmarks"):
-                st.session_state.show_bookmarks = not st.session_state.get('show_bookmarks', False)
+        code_input = st.text_area(
+            "Enter your code here:",
+            height=300,
+            placeholder="def example():\n    # Your code here\n    pass",
+        )
+
         
-        # D. Show bookmarks if toggled
-        if st.session_state.get('show_bookmarks', False):
-            with st.expander("🔖 My Bookmarks", expanded=True):
-                show_bookmarks()
+
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1471,8 +1461,9 @@ def show_execution_sandbox_mode():
             if st.button("Close Guide"):
                 st.session_state.show_docker_guide = False
                 st.rerun()
-    
+
     with tab1:
+
         st.subheader("📝 Enter Code to Execute")
         
         # ── Language selector first so problem list updates with it ──
@@ -2885,16 +2876,17 @@ Line 1: <Original {src_lang} line> | <Translated {tgt_lang} line> | <Idiomatic e
                         if gh_context:
                             st.markdown("#### 🐙 Verified GitHub Examples")
                             for i, s in enumerate(gh_context, 1):
-                                st.markdown(f"- **{s['repo']}**: [`{s['path']}`]({s['url']})")
-                                with st.expander(f"View patterns from {s['repo']}"):
-                                    st.code(s['content'][:1000], language=tgt_lang.lower())
+                                st.markdown(f"**{i}. {s['repo']}**: [`{s['path']}`]({s['url']})")
+                                st.markdown(f"**Patterns from {s['repo']}:**")
+                                st.code(s['content'][:1000], language=tgt_lang.lower())
                         
                         if so_context:
+                            st.markdown("---")
                             st.markdown("#### 💬 Top StackOverflow Solutions")
                             for i, s in enumerate(so_context, 1):
-                                st.markdown(f"- **[{s['title']}]({s['link']})**")
-                                with st.expander(f"View StackOverflow code snippet"):
-                                    st.code(s['content'][:1000], language=tgt_lang.lower())
+                                st.markdown(f"**{i}. [{s['title']}]({s['link']})**")
+                                st.markdown("**StackOverflow code snippet:**")
+                                st.code(s['content'][:1000], language=tgt_lang.lower())
                     else:
                         st.info("No external references were found for this specific logic, so Groq used its internal knowledge.")
 
@@ -3715,37 +3707,23 @@ def main():
     # Main search interface
     st.subheader("🔍 Search Code Snippets")
     
-    # C. Voice Input + Bookmarks
-    col1, col2, col3 = st.columns([3, 1, 1])
-    with col1:
-        query = st.text_input(
-            "Describe your problem",
-            placeholder="e.g., sort array, binary search, merge sort",
-            key="search_input",
-            value=st.session_state.get('voice_input', '')
-        )
-    with col2:
-        voice_input_component()
-    with col3:
-        if st.button("🔖 Bookmarks", use_container_width=True):
-            st.session_state.show_bookmarks_main = not st.session_state.get('show_bookmarks_main', False)
+    # Main search interface
+    query = st.text_input(
+        "Describe your problem",
+        placeholder="e.g., sort array, binary search, merge sort",
+        key="search_input"
+    )
     
-    # D. Show bookmarks
-    if st.session_state.get('show_bookmarks_main', False):
-        with st.expander("🔖 My Bookmarks", expanded=True):
-            show_bookmarks()
-    
-    # Search button
-    col1, col2 = st.columns([4, 1])
-    with col2:
-        search_button = st.button("Get Recommendations", type="primary", use_container_width=True)
+    # Trigger search on Enter (text_input returns value)
+    search_triggered = query.strip() != ""
+
     
     # Initialize variables
     results = []
     filtered_results = []
     
     # Search results
-    if search_button and query:
+    if search_triggered and query:
         st.markdown(f"**Showing results for \"{query}\" in {language}**")
         
         # Retrieve similar snippets from dataset
@@ -3942,17 +3920,22 @@ def main():
             st.info(f"No {language} snippets found in dataset. Use AI generation below to create code.")
     
     # Show info for languages without datasets
-    elif not search_button and len(filtered_df) == 0:
+    elif not search_triggered and len(filtered_df) == 0:
         st.info(f"No {language} snippets in dataset. Use AI generation above to create code.")
     
     # Performance visualizations
     if st.session_state.df is not None:
         # Get current search results if available
         current_results = None
-        if 'search_button' in locals() and search_button and query and 'filtered_results' in locals():
+        if search_triggered and query and 'filtered_results' in locals():
             current_results = filtered_results
         
         create_performance_visualizations(filtered_df if 'filtered_df' in locals() else st.session_state.df, current_results, language)
+    
+    # Bookmarks Section
+    st.markdown("---")
+    st.subheader("🔖 My Bookmarks")
+    show_bookmarks()
     
     # Footer
     st.markdown("---")
