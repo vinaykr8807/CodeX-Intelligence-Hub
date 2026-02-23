@@ -821,6 +821,7 @@ def show_code_diff(before_code, after_code):
 # B. Export to GitHub Gist
 def export_to_gist(code, description, filename="code.py"):
     """Export code to GitHub Gist"""
+    load_dotenv() # Force reload from .env
     token = os.getenv('GITHUB_TOKEN')
     if not token or token == "YOUR_GITHUB_TOKEN":
         return "ERROR: GitHub token not configured in .env"
