@@ -822,14 +822,18 @@ def show_code_diff(before_code, after_code):
 def export_to_gist(code, description, filename="code.py"):
     """Export code to GitHub Gist"""
     token = os.getenv('GITHUB_TOKEN')
-    if not token:
-        return "GitHub token not configured"
+    if not token or token == "YOUR_GITHUB_TOKEN":
+        return "ERROR: GitHub token not configured in .env"
     try:
         data = {"description": description, "public": True, "files": {filename: {"content": code}}}
         r = requests.post('https://api.github.com/gists', headers={'Authorization': f'token {token}'}, json=data)
-        return r.json().get('html_url', 'Failed') if r.status_code == 201 else "Failed"
-    except:
-        return "Failed"
+        if r.status_code == 201:
+            return r.json().get('html_url')
+        else:
+            error_msg = r.json().get('message', 'Unknown error')
+            return f"ERROR: {error_msg} (Status: {r.status_code})"
+    except Exception as e:
+        return f"ERROR: {str(e)}"
 
 # C. Voice Input Component
 def voice_input_component():
@@ -3817,7 +3821,9 @@ def main():
                                 url = export_to_gist(result['code'], result['title'], f"snippet_{i}.py")
                                 if url.startswith('http'):
                                     st.success("Exported!")
-                                    st.markdown(f"[View]({url})")
+                                    st.markdown(f"[View Gist]({url})")
+                                else:
+                                    st.error(url)
                             
                             # D. Bookmark
                             if st.button("🔖 Save", key=f"bm_result_{i}"):
@@ -3907,6 +3913,8 @@ def main():
                     url = export_to_gist(generated_code.strip(), query, f"{language.lower()}_solution.py")
                     if url.startswith('http'):
                         st.success(f"[View Gist]({url})")
+                    else:
+                        st.error(url)
             with col4:
                 if st.button("🔖 Bookmark", key="bm_generated"):
                     add_bookmark(generated_code.strip(), query, language, f"AI Generated - {difficulty_level}")
