@@ -1,4 +1,8 @@
-import streamlit as st
+﻿import streamlit as st
+st.set_page_config(page_title="CodeX Intelligence Hub", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
+from dotenv import load_dotenv; load_dotenv()
+
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -10,7 +14,7 @@ import os
 import json
 import time
 import subprocess
-from dotenv import load_dotenv
+
 import requests
 from sentence_transformers import SentenceTransformer
 import faiss
@@ -19,6 +23,101 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 import csv
 from datetime import datetime
+
+
+
+def load_css():
+    css = """
+    <style>
+    /* Modern Streamlit UI Design - Light Theme Focus */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    .stApp {
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Glass container style */
+    .metric-card, .stMetric, [data-testid="metric-container"] {
+        background: rgba(255, 255, 255, 0.6) !important;
+        backdrop-filter: blur(12px) !important;
+        border-radius: 14px !important;
+        padding: 16px !important;
+        border: 1px solid rgba(0, 0, 0, 0.06) !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05) !important;
+    }
+
+    /* Buttons Modern Gradient */
+    div.stButton > button {
+        background: linear-gradient(135deg, #10b981, #059669) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        padding: 0.5rem 1rem !important;
+        transition: all 0.2s ease !important;
+    }
+
+    div.stButton > button:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3) !important;
+        filter: brightness(1.05) !important;
+    }
+
+    /* Sidebar Refinement */
+    [data-testid="stSidebar"] {
+        background-color: #f8fafc !important;
+        border-right: 1px solid rgba(0, 0, 0, 0.05) !important;
+    }
+
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: transparent;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        height: 40px;
+        white-space: pre-wrap;
+        background-color: rgba(255, 255, 255, 0.5);
+        border-radius: 8px 8px 0 0;
+        gap: 1px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background-color: rgba(255, 255, 255, 1) !important;
+        border-bottom: 2px solid #10b981 !important;
+    }
+
+    /* Tooltips and inputs */
+    .stTextInput input, .stTextArea textarea {
+        border-radius: 8px !important;
+        border: 1px solid rgba(0, 0, 0, 0.1) !important;
+    }
+    
+    /* Text readability updates - Default colors without !important to allow overrides */
+    h1, h2, h3, h4, h5, h6 {
+        color: #1e293b; 
+    }
+    p, span, label {
+        color: #334155;
+    }
+
+    /* Header Section Modernization */
+    .header-section {
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
+        margin-bottom: 2rem;
+        border: 1px solid rgba(0, 0, 0, 0.05);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    }
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+load_css()
 
 # Initialize session state for auto-save
 if 'auto_save_enabled' not in st.session_state:
@@ -216,7 +315,7 @@ Code:
         words = _re.findall(r'\b[a-zA-Z\_]{5,}\b', code[:300]) 
         return " ".join(words[:4])
 
-# Load environment variables — called ONCE here, not repeated per-feature
+# Load environment variables - called ONCE here, not repeated per-feature
 load_dotenv()
 
 # ── Shared constants ─────────────────────────────────────────
@@ -240,133 +339,12 @@ def get_groq_client():
             return None
     return st.session_state.groq_client
 
-# Page configuration
-st.set_page_config(
-    page_title="CodeX Intelligence Hub",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# API Configuration
 
 # API Configuration
 
 
-# Premium CodeX UI Design System
-hub_css = """
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
-    :root {
-        --primary-gradient: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        --accent-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        --glass-bg: rgba(255, 255, 255, 0.03);
-        --glass-border: rgba(255, 255, 255, 0.1);
-        --slate-900: #0f172a;
-        --slate-800: #1e293b;
-        --slate-700: #334155;
-    }
-
-    /* Global Typography & Layout */
-    .stApp {
-        font-family: 'Inter', sans-serif;
-        background-color: #0c111d;
-    }
-
-    /* Professional Header Section */
-    .header-section {
-        background: radial-gradient(circle at top left, #1e3a8a 0%, #0f172a 100%);
-        padding: 3rem 2rem;
-        border-radius: 20px;
-        margin-bottom: 2.5rem;
-        text-align: center;
-        border: 1px solid var(--glass-border);
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
-        position: relative;
-        overflow: hidden;
-    }
-
-    .header-section::after {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: url('https://www.transparenttextures.com/patterns/carbon-fibre.png');
-        opacity: 0.05;
-        pointer-events: none;
-    }
-
-    /* Glassmorphism Cards */
-    .metric-card, .stMetric {
-        background: var(--glass-bg) !important;
-        backdrop-filter: blur(12px) !important;
-        border: 1px solid var(--glass-border) !important;
-        border-radius: 16px !important;
-        padding: 1.5rem !important;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .metric-card:hover {
-        border-color: #3b82f6 !important;
-        transform: translateY(-4px);
-        box-shadow: 0 10px 20px -5px rgba(59, 130, 246, 0.2);
-    }
-
-    /* High-End Code Snippet Result Design */
-    .code-result-card {
-        background: #161b22;
-        border-radius: 12px;
-        border: 1px solid #30363d;
-        margin: 1.5rem 0;
-        padding: 0;
-        overflow: hidden;
-    }
-
-    .card-header {
-        background: #21262d;
-        padding: 12px 20px;
-        border-bottom: 1px solid #30363d;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    /* Custom Scrollbar for a Premium Feel */
-    ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-    }
-    ::-webkit-scrollbar-track {
-        background: #0f172a;
-    }
-    ::-webkit-scrollbar-thumb {
-        background: #334155;
-        border-radius: 10px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: #475569;
-    }
-
-    /* Button Enhancements */
-    div.stButton > button {
-        background: var(--primary-gradient) !important;
-        color: white !important;
-        border: none !important;
-        padding: 0.6rem 1.5rem !important;
-        border-radius: 8px !important;
-        font-weight: 600 !important;
-        transition: filter 0.2s;
-    }
-
-    div.stButton > button:hover {
-        filter: brightness(1.2);
-    }
-
-    /* Sidebar Refinement */
-    [data-testid="stSidebar"] {
-        background-color: #0c111d !important;
-        border-right: 1px solid var(--glass-border);
-    }
-</style>
-"""
+# Premium CodeX UI Design System removed in favor of load_css()
 
 # Initialize session state
 if 'model' not in st.session_state:
@@ -428,7 +406,7 @@ if 'enhance_lang' not in st.session_state:
 
 @st.cache_data
 def _load_problem_titles_cached(language: str, _file_mtime: float):
-    """Load problem titles — cache key includes file mtime so it auto-refreshes on CSV changes."""
+    """Load problem titles - cache key includes file mtime so it auto-refreshes on CSV changes."""
     import re as _re
     titles = []
     try:
@@ -925,9 +903,9 @@ def show_bug_intelligence_mode():
     """Show bug intelligence interface with tabs"""
     st.markdown("""
     <div class="header-section">
-        <h1 style="color: white; margin: 0; font-size: 3rem;">🚀 CodeX Intelligence</h1>
-        <h2 style="color: white; margin: 0.5rem 0; font-weight: normal;">AI-Powered Deep Code Analysis</h2>
-        <p style="color: #f0f0f0; margin: 0;">Analyze complex bugs and logic with 277K+ cross-referenced knowledge nodes</p>
+        <h1 style="color: inherit; margin: 0; font-size: 2.5rem;">🚀 CodeX Intelligence</h1>
+        <h2 style="color: inherit; margin: 0.5rem 0; font-weight: 500; opacity: 0.8;">AI-Powered Deep Code Analysis</h2>
+        <p style="color: inherit; margin: 0; opacity: 0.7;">Analyze complex bugs and logic with 277K+ cross-referenced knowledge nodes</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -961,6 +939,14 @@ def show_bug_intelligence_mode():
         with col3:
             refactor_btn = st.button("🔧 Refactor", use_container_width=True)
         
+        if 'bug_analysis_state' not in st.session_state:
+            st.session_state.bug_analysis_state = {
+                'result': None,
+                'action': None,
+                'refactored_code': None,
+                'code_input': ''
+            }
+
         action = None
         if debug_btn:
             action = 'debug'
@@ -972,7 +958,34 @@ def show_bug_intelligence_mode():
         if action and code_input:
             with st.spinner(f"🤖 Analyzing code for {action} with Bug Intelligence..."):
                 result = analyze_code_with_rag(code_input, action)
-            
+                st.session_state.bug_analysis_state['result'] = result
+                st.session_state.bug_analysis_state['action'] = action
+                st.session_state.bug_analysis_state['code_input'] = code_input
+                
+                # Extract refactored code if action is refactor
+                refactored_code = None
+                if action == 'refactor':
+                    import re as _re
+                    code_blocks = _re.findall(r'```(?:python)?\n([\s\S]*?)```', result['analysis'])
+                    if code_blocks:
+                        refactored_code = code_blocks[-1].strip()
+                st.session_state.bug_analysis_state['refactored_code'] = refactored_code
+                
+                st.session_state.analysis_history.append({
+                    "timestamp": datetime.now(),
+                    "action": action,
+                    "code_lines": len(code_input.split('\n')),
+                    "patterns_found": sum(len(la['contexts']) for la in result['line_analyses']),
+                    "result": result
+                })
+
+        # Display results if they exist in state
+        if st.session_state.bug_analysis_state['result']:
+            result = st.session_state.bug_analysis_state['result']
+            action = st.session_state.bug_analysis_state['action']
+            refactored_code = st.session_state.bug_analysis_state['refactored_code']
+            code_input_stored = st.session_state.bug_analysis_state['code_input']
+
             st.markdown("---")
             # Severity Banner
             st.markdown(f"""
@@ -984,13 +997,6 @@ def show_bug_intelligence_mode():
             </div>""", unsafe_allow_html=True)
             
             st.subheader(f"📋 {action.title()} Intelligence Report")
-            
-            # Extract refactored code if action is refactor
-            refactored_code = None
-            if action == 'refactor':
-                code_blocks = re.findall(r'```(?:python)?\n([\s\S]*?)```', result['analysis'])
-                if code_blocks:
-                    refactored_code = code_blocks[-1].strip()
             
             with st.expander("🔍 Line-by-Line Context (from GitHub/StackOverflow)"):
                 for la in result['line_analyses'][:10]:
@@ -1011,13 +1017,13 @@ def show_bug_intelligence_mode():
             # A. Show Code Diff for refactor
             if action == 'refactor' and refactored_code:
                 st.markdown("### 🔄 Code Diff Viewer")
-                show_code_diff(code_input, refactored_code)
+                show_code_diff(code_input_stored, refactored_code)
             
             # B. Export to Gist
             col1, col2, col3 = st.columns(3)
             with col1:
                 if st.button("📤 Export to Gist", key=f"gist_{action}"):
-                    url = export_to_gist(refactored_code or code_input, f"{action.title()} result", f"{action}.py")
+                    url = export_to_gist(refactored_code or code_input_stored, f"{action.title()} result", f"{action}.py")
                     if url.startswith('http'):
                         st.success(f"[View Gist]({url})")
                     else:
@@ -1025,7 +1031,7 @@ def show_bug_intelligence_mode():
             # D. Bookmark
             with col2:
                 if st.button("🔖 Bookmark", key=f"bm_{action}"):
-                    add_bookmark(refactored_code or code_input, f"{action.title()} result", action, result['analysis'][:100])
+                    add_bookmark(refactored_code or code_input_stored, f"{action.title()} result", action, result['analysis'][:100])
                     st.success("Bookmarked!")
             
             # Show visual summary
@@ -1043,14 +1049,6 @@ def show_bug_intelligence_mode():
                     st.metric("Lines with Patterns", lines_with_patterns)
                 with col3:
                     st.metric("Total Patterns Found", total_patterns)
-            
-            st.session_state.analysis_history.append({
-                "timestamp": datetime.now(),
-                "action": action,
-                "code_lines": len(code_input.split('\n')),
-                "patterns_found": sum(len(la['contexts']) for la in result['line_analyses']),
-                "result": result
-            })
     
     with tab2:
         st.subheader("🐛 Bug Intelligence")
@@ -1142,10 +1140,11 @@ def execute_code_safely(code, language, test_cases=None):
         
         # Prepare file and commands based on language
         if language == 'Python':
+            import sys as _sys
             temp_file = os.path.join(temp_dir, 'code.py')
             docker_image = 'python:3.11-slim'
             docker_run_cmd = ['python', '/code/code.py']
-            local_run_cmd = ['python', temp_file]
+            local_run_cmd = [_sys.executable, temp_file]
         elif language == 'Java':
             match = re.search(r'public\s+class\s+(\w+)', code)
             java_classname = match.group(1) if match else 'Main'
@@ -1266,38 +1265,90 @@ def execute_code_safely(code, language, test_cases=None):
             for tc in test_cases:
                 if language == 'Python':
                     try:
-                        test_code = code + f"\nprint({tc['input']})"
+                        # Intelligent test input wrapping
+                        test_input = tc['input']
+                        if '(' not in test_input:
+                            import re as _re_search
+                            func_match = _re_search.search(r'def\s+(\w+)\s*\(', code)
+                            if func_match:
+                                fname = func_match.group(1)
+                                test_input = f"{fname}({test_input})"
+                        
+                        test_code = code + f"\nprint({test_input})"
                         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as tf:
                             tf.write(test_code)
                             test_file = tf.name
-                        tp = subprocess.Popen(['python', test_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-                        tout, terr = tp.communicate()
+                        import sys as _sys
+                        tp = subprocess.Popen([_sys.executable, test_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                        tout, terr = tp.communicate(timeout=2)
+                        
+                        actual = tout.strip()
+                        expected = str(tc['expected']).strip()
+                        # Flexible comparison
+                        def clean(s):
+                            import re as _inner_re
+                            s = _inner_re.sub(r'[*_`]', '', str(s))
+                            s = s.replace(' ', '').replace('"', "'")
+                            return s
+                        
                         results['test_results'].append({
                             'input': tc['input'],
                             'expected': tc['expected'],
-                            'actual': tout.strip(),
-                            'passed': tout.strip() == str(tc['expected'])
+                            'actual': actual,
+                            'passed': clean(actual) == clean(expected)
                         })
-                        os.unlink(test_file)
-                    except:
-                        pass
+                        if os.path.exists(test_file):
+                            os.unlink(test_file)
+                    except Exception as e:
+                        results['test_results'].append({
+                            'input': tc['input'],
+                            'expected': tc['expected'],
+                            'actual': f"Execution Error: {str(e)}",
+                            'passed': False
+                        })
                 elif language == 'JavaScript':
                     try:
-                        test_code = code + f"\nconsole.log({tc['input']})"
+                        # Intelligent test input wrapping for JS
+                        test_input = tc['input']
+                        if '(' not in test_input:
+                            import re as _re_search
+                            # Match function name or const name = (...) =>
+                            func_match = _re_search.search(r'function\s+(\w+)|const\s+(\w+)\s*=', code)
+                            fname = None
+                            if func_match:
+                                fname = func_match.group(1) or func_match.group(2)
+                                test_input = f"{fname}({test_input})"
+                                
+                        test_code = code + f"\nconsole.log({test_input})"
                         with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False) as tf:
                             tf.write(test_code)
                             test_file = tf.name
-                        tp = subprocess.Popen(['node', test_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-                        tout, terr = tp.communicate()
+                        tp = subprocess.Popen(['node', test_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                        tout, terr = tp.communicate(timeout=2)
+                        
+                        actual = tout.strip()
+                        expected = str(tc['expected']).strip()
+                        def clean(s):
+                            import re as _inner_re
+                            s = _inner_re.sub(r'[*_`]', '', str(s))
+                            s = s.replace(' ', '').replace('"', "'")
+                            return s
+
                         results['test_results'].append({
                             'input': tc['input'],
                             'expected': tc['expected'],
-                            'actual': tout.strip(),
-                            'passed': tout.strip() == str(tc['expected'])
+                            'actual': actual,
+                            'passed': clean(actual) == clean(expected)
                         })
-                        os.unlink(test_file)
-                    except:
-                        pass
+                        if os.path.exists(test_file):
+                            os.unlink(test_file)
+                    except Exception as e:
+                        results['test_results'].append({
+                            'input': tc['input'],
+                            'expected': tc['expected'],
+                            'actual': f"Execution Error: {str(e)}",
+                            'passed': False
+                        })
                 elif language in ['Java', 'C++']:
                     # Java/C++ require compiled test harness – manual review
                     pass
@@ -1326,6 +1377,8 @@ def generate_test_cases(code, problem_description, groq_client, language="Python
             format_note = "For Java, provide inputs as they would be passed to the method or script."
         elif language == "C++":
             format_note = "For C++, provide inputs suitable for std::cin or function arguments."
+        elif language in ["Python", "JavaScript"]:
+            format_note = f"CRITICAL: For {language}, the 'Input' must be a full function call that exists in the code (e.g., 'sum(5, 10)'), not just the values."
             
         prompt = f"""Generate 5 test cases for this {language} code:
 
@@ -1336,7 +1389,7 @@ Code:
 
 {format_note}
 Provide ONLY test cases in this exact format:
-Input: <input>
+Input: <full function call or input values>
 Expected: <output>
 
 Include edge cases (empty, large, negative)."""
@@ -1353,17 +1406,35 @@ Include edge cases (empty, large, negative)."""
         
         content = response.choices[0].message.content
         
-        # Parse test cases
+        # Parse test cases using a robust regex that handles same-line or multi-line formats
+        import re as _re
+        # This regex matches "Input: ..." followed by "Expected: ..." regardless of newlines
+        # and stops before the next "Input:" or end of string.
+        patterns = _re.findall(r'Input:\s*(.*?)\s*[ \t\n]*Expected:\s*(.*?)(?=\s*Input:|\s*\n\n|\Z)', content, _re.DOTALL | _re.IGNORECASE)
         test_cases = []
-        lines = content.split('\n')
-        current_input = None
-        for line in lines:
-            if line.startswith('Input:'):
-                current_input = line.replace('Input:', '').strip()
-            elif line.startswith('Expected:') and current_input:
-                expected = line.replace('Expected:', '').strip()
-                test_cases.append({'input': current_input, 'expected': expected})
-                current_input = None
+        for input_val, expected_val in patterns:
+            # Clean up residual markdown and same-line leaks
+            in_clean = _re.sub(r'[*_`]', '', input_val).strip()
+            ex_clean = _re.sub(r'[*_`]', '', expected_val).strip()
+            if in_clean and ex_clean:
+                test_cases.append({
+                    'input': in_clean,
+                    'expected': ex_clean
+                })
+        
+        # Super Fallback: line by line if regex failed
+        if not test_cases:
+            lines = content.split('\n')
+            for line in lines:
+                if 'Input:' in line and 'Expected:' in line:
+                    match = _re.search(r'Input:\s*(.*?)\s*Expected:\s*(.*)', line, _re.IGNORECASE)
+                    if match:
+                        test_cases.append({'input': match.group(1).strip(), 'expected': match.group(2).strip()})
+                elif 'Input:' in line:
+                    current_input = line.split('Input:', 1)[1].strip()
+                elif 'Expected:' in line and 'current_input' in locals() and current_input:
+                    test_cases.append({'input': current_input, 'expected': line.split('Expected:', 1)[1].strip()})
+                    current_input = None
         
         return test_cases, content
     except Exception as e:
@@ -1388,9 +1459,9 @@ def show_execution_sandbox_mode():
     """Show code execution sandbox with analytics"""
     st.markdown("""
     <div class="header-section">
-        <h1 style="color: white; margin: 0; font-size: 3rem;">⚡ Code Execution Sandbox</h1>
-        <h2 style="color: white; margin: 0.5rem 0; font-weight: normal;">Test & Validate Code with Performance Metrics</h2>
-        <p style="color: #f0f0f0; margin: 0;">Safe execution + AI test generation + Code enhancement</p>
+        <h1 style="color: inherit; margin: 0; font-size: 2.5rem;">⚡ Code Execution Sandbox</h1>
+        <h2 style="color: inherit; margin: 0.5rem 0; font-weight: 500; opacity: 0.8;">Test & Validate Code with Performance Metrics</h2>
+        <p style="color: inherit; margin: 0; opacity: 0.7;">Safe execution + AI test generation + Code enhancement</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -1916,7 +1987,16 @@ REASON: [Short 1-sentence explanation]"""
                     elif st.session_state.test_lang in ['Java', 'C++']:
                         st.info("ℹ️ Automated test execution for Java/C++ requires a print-based test harness. Review expected outputs above manually.")
                     else:
-                        st.info("No test results – the code may not have callable functions. Run manually with the inputs above.")
+                        if not run_result.get('success', False):
+                            st.error(f"❌ Execution Error:\n```\n{run_result.get('error', 'Unknown Error')}\n```")
+                            st.info("💡 **Tip:** Ensure your code is complete and doesn't have syntax errors.")
+                        elif not run_result.get('test_results'):
+                            st.info("⚠️ **No test results returned.**")
+                            st.code(f"Code checked: {st.session_state.test_lang}\nTest cases sent: {len(st.session_state.generated_test_cases)}")
+                            if run_result.get('error'):
+                                st.error(f"Sandbox Error: {run_result['error']}")
+                        else:
+                            st.info("⚠️ No test results – the code may not have callable functions. Try modifying the code to include a direct call.")
             else:
                 st.warning("⚠️ AI could not parse structured test cases. Raw response:")
                 st.markdown(st.session_state.generated_test_content)
@@ -2242,7 +2322,7 @@ def load_embeddings_and_index():
                 faiss.serialize_index(loaded_index)
                 index = loaded_index  # it's safe, use as-is
             except Exception:
-                # Incompatible index type — rebuild a fresh serializable IndexFlatIP
+                # Incompatible index type - rebuild a fresh serializable IndexFlatIP
                 emb = embeddings.astype('float32').copy()
                 faiss.normalize_L2(emb)
                 d = emb.shape[1]
@@ -2431,7 +2511,7 @@ def save_generated_code_to_csv(problem_statement, generated_code, language, diff
                 # Also update session state index to the fresh serializable one
                 st.session_state.index = fresh_index
             except Exception as idx_err:
-                # FAISS save failed but CSV was saved — non-fatal
+                # FAISS save failed but CSV was saved - non-fatal
                 pass
         
         return True
@@ -2740,9 +2820,9 @@ def create_performance_visualizations(df, search_results=None, language="Python"
 def show_code_translator():
     """🔄 Translate code between Python, Java, C++, JavaScript with AI explanation."""
     st.markdown("""
-    <div style='background:linear-gradient(135deg,#1e293b,#0f172a);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #334155'>
-        <h2 style='color:#38bdf8;margin:0'>🔄 Code Translator</h2>
-        <p style='color:#94a3b8;margin:4px 0 0'>Convert code between languages instantly — the "Google Translate for code"</p>
+    <div style='background:linear-gradient(135deg,#f0fdf4,#dcfce7);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #bbf7d0'>
+        <h2 style='color:#166534;margin:0'>🔄 Code Translator</h2>
+        <p style='color:#15803d;margin:4px 0 0'>Convert code between languages instantly - the "Google Translate for code"</p>
     </div>""", unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([2, 1, 2])
@@ -2905,9 +2985,9 @@ Line 1: <Original {src_lang} line> | <Translated {tgt_lang} line> | <Idiomatic e
 def show_code_quality_scorer():
     """📊 Score code 0-100 across 5 dimensions with AI explanation."""
     st.markdown("""
-    <div style='background:linear-gradient(135deg,#1e3a1e,#0f2a0f);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #22c55e33'>
-        <h2 style='color:#4ade80;margin:0'>📊 Code Quality Scorer</h2>
-        <p style='color:#86efac;margin:4px 0 0'>Get a comprehensive 0-100 quality score with AI-powered breakdown and fix suggestions</p>
+    <div style='background:linear-gradient(135deg,#eff6ff,#dbeafe);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #bfdbfe'>
+        <h2 style='color:#1e40af;margin:0'>📊 Code Quality Scorer</h2>
+        <p style='color:#1d4ed8;margin:4px 0 0'>Get a comprehensive 0-100 quality score with AI-powered breakdown and fix suggestions</p>
     </div>""", unsafe_allow_html=True)
 
 
@@ -2974,9 +3054,9 @@ Respond ONLY in this JSON format:
                 col_score, col_gauge = st.columns([1, 2])
                 with col_score:
                     st.markdown(f"""
-                    <div style='background:#1e293b;border-radius:16px;padding:24px;text-align:center;border:2px solid {grade_color}'>
+                    <div style='background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);border-radius:16px;padding:24px;text-align:center;border:2px solid {grade_color}'>
                         <div style='font-size:4rem;font-weight:900;color:{grade_color}'>{total}</div>
-                        <div style='color:#94a3b8;font-size:0.9em'>out of 100</div>
+                        <div style='color:#1e293b;font-size:0.9em;font-weight:600'>out of 100</div>
                         <div style='font-size:2rem;font-weight:700;color:{grade_color};margin-top:8px'>Grade: {grade}</div>
                     </div>""", unsafe_allow_html=True)
                 with col_gauge:
@@ -2985,7 +3065,7 @@ Respond ONLY in this JSON format:
                         value=total,
                         domain={'x': [0, 1], 'y': [0, 1]},
                         gauge={
-                            'axis': {'range': [0, 100], 'tickcolor': '#94a3b8'},
+                            'axis': {'range': [0, 100], 'tickcolor': '#1e293b'},
                             'bar': {'color': grade_color},
                             'steps': [
                                 {'range': [0, 50], 'color': '#1f2937'},
@@ -2994,7 +3074,7 @@ Respond ONLY in this JSON format:
                             'threshold': {'line': {'color': grade_color, 'width': 3}, 'value': total}
                         }
                     ))
-                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0', height=200, margin=dict(t=20,b=20))
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='#1e293b', height=200, margin=dict(t=20,b=20))
                     st.plotly_chart(fig, use_container_width=True)
 
                 # radar chart
@@ -3002,13 +3082,13 @@ Respond ONLY in this JSON format:
                 fig_radar = go.Figure(go.Scatterpolar(
                     r=scores + [scores[0]],
                     theta=[dim_labels[d] for d in dims] + [dim_labels[dims[0]]],
-                    fill='toself', fillcolor='rgba(56,189,248,0.15)',
-                    line=dict(color='#38bdf8', width=2)
+                    fill='toself', fillcolor='rgba(16, 185, 129, 0.1)',
+                    line=dict(color='#10b981', width=2)
                 ))
                 fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True, range=[0, 100], color='#94a3b8'),
-                               angularaxis=dict(color='#94a3b8')),
-                    paper_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0',
+                    polar=dict(radialaxis=dict(visible=True, range=[0, 100], color='#1e293b'),
+                               angularaxis=dict(color='#1e293b')),
+                    paper_bgcolor='rgba(0,0,0,0)', font_color='#1e293b',
                     showlegend=False, height=320, margin=dict(t=20, b=20)
                 )
                 st.plotly_chart(fig_radar, use_container_width=True)
@@ -3020,7 +3100,7 @@ Respond ONLY in this JSON format:
                     sc = info.get("score", 0)
                     pct = sc / 20
                     bar_color = "#4ade80" if pct >= 0.75 else "#fbbf24" if pct >= 0.5 else "#f87171"
-                    with st.expander(f"{dim_labels[d]}  —  **{sc}/20**", expanded=False):
+                    with st.expander(f"{dim_labels[d]}  -  **{sc}/20**", expanded=False):
                         st.progress(pct, text=f"{sc}/20")
                         st.markdown(f"**Why:** {info.get('reason','')}")
                         st.markdown(f"**Fix:** `{info.get('fix','')}`")
@@ -3058,9 +3138,9 @@ Respond ONLY in this JSON format:
 def show_ai_code_review():
     """🤝 AI-powered code review with inline comments and structured report."""
     st.markdown("""
-    <div style='background:linear-gradient(135deg,#1e1e3a,#0f0f2a);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #6366f133'>
-        <h2 style='color:#a78bfa;margin:0'>🤝 AI Code Review</h2>
-        <p style='color:#c4b5fd;margin:4px 0 0'>Get a thorough code review with inline comments, priority issues, and a summary report</p>
+    <div style='background:linear-gradient(135deg,#faf5ff,#f3e8ff);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #e9d5ff'>
+        <h2 style='color:#6b21a8;margin:0'>🤝 AI Code Review</h2>
+        <p style='color:#7e22ce;margin:4px 0 0'>Get a thorough code review with inline comments, priority issues, and a summary report</p>
     </div>""", unsafe_allow_html=True)
 
     col1, col2 = st.columns([1, 1])
@@ -3148,7 +3228,7 @@ Provide a structured review in this EXACT format:
 [Low/Medium/High/Critical]
 
 ### POSITIVE_NOTES
-<What the code does well — 3-5 bullet points>
+<What the code does well - 3-5 bullet points>
 
 ### SUMMARY
 <Overall assessment with recommendation: APPROVE / REQUEST_CHANGES / NEEDS_MAJOR_REWORK>
@@ -3279,9 +3359,17 @@ def show_learning_path():
         st.session_state.completed_topics = set()
 
     st.markdown("""
-    <div style='background:linear-gradient(135deg,#1a1a2e,#16213e);padding:24px;border-radius:16px;margin-bottom:20px;border:1px solid #f59e0b33'>
-        <h2 style='color:#fbbf24;margin:0'>🎓 Personalized Learning Path</h2>
-        <p style='color:#fcd34d;margin:4px 0 0'>Submit your code → AI identifies skill gaps → Get a custom roadmap to mastery</p>
+    <div style='background: rgba(16, 185, 129, 0.1); 
+                backdrop-filter: blur(10px);
+                padding: 30px; 
+                border-radius: 20px; 
+                margin-bottom: 25px; 
+                border: 1px solid rgba(16, 185, 129, 0.3);
+                box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);'>
+        <h2 style='color:#064e3b !important; margin:0; font-size: 2rem; font-weight: 700;'>🎓 Personalized Learning Path</h2>
+        <p style='color:#065f46 !important; margin:8px 0 0; font-size: 1.1rem;'>
+            Submit your code → AI identifies skill gaps → Get a custom roadmap to mastery
+        </p>
     </div>""", unsafe_allow_html=True)
 
     tab_assess, tab_path, tab_progress = st.tabs(["📋 Skill Assessment", "🗺️ My Learning Path", "📈 Progress Tracker"])
@@ -3298,7 +3386,7 @@ def show_learning_path():
 
         code_sample = st.text_area("📝 Submit a Code Sample (any code you've written):",
                                     height=250, key="lp_code",
-                                    placeholder="Paste any code you've written recently — doesn't need to be perfect!")
+                                    placeholder="Paste any code you've written recently - doesn't need to be perfect!")
 
         goals = st.text_input("🎯 What do you want to achieve?",
                                placeholder="e.g., Get a job as a backend developer, Learn data structures, Pass coding interviews",
@@ -3404,11 +3492,11 @@ Respond ONLY in this JSON:
                 with col_sk:
                     st.markdown("#### ✅ Detected Skills")
                     for s in skills:
-                        st.markdown(f"<div style='background:#14532d33;border-left:3px solid #4ade80;padding:6px 10px;border-radius:4px;margin:3px 0;color:#86efac'>{s}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='background:#f0fdf4; border-left:4px solid #16a34a; padding:10px 15px; border-radius:8px; margin:5px 0; color:#166534; font-weight:500;'>{s}</div>", unsafe_allow_html=True)
                 with col_gp:
                     st.markdown("#### ⚠️ Skill Gaps to Fill")
                     for g in gaps:
-                        st.markdown(f"<div style='background:#7f1d1d33;border-left:3px solid #f87171;padding:6px 10px;border-radius:4px;margin:3px 0;color:#fca5a5'>{g}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='background:#fef2f2; border-left:4px solid #dc2626; padding:10px 15px; border-radius:8px; margin:5px 0; color:#991b1b; font-weight:500;'>{g}</div>", unsafe_allow_html=True)
 
             st.markdown("---")
             st.markdown("#### 🗺️ Your Learning Phases")
@@ -3417,7 +3505,7 @@ Respond ONLY in this JSON:
                 ph_num = phase.get('phase', '?')
                 is_done = ph_num in st.session_state.completed_topics
                 icon = "✅" if is_done else f"🔵 Phase {ph_num}"
-                with st.expander(f"{icon}: {phase.get('title','')}  —  ⏱️ {phase.get('duration','')}", expanded=(ph_num == 1)):
+                with st.expander(f"{icon}: {phase.get('title','')}  -  ⏱️ {phase.get('duration','')}", expanded=(ph_num == 1)):
                     col_t, col_p = st.columns(2)
                     with col_t:
                         st.markdown("**📚 Topics:**")
@@ -3556,15 +3644,14 @@ def main():
         show_bug_intelligence_mode()
         return
     
-    # Apply Hub Styling
-    st.markdown(hub_css, unsafe_allow_html=True)
+    #load_css() is already called at top level
 
     # Header section
     st.markdown(f"""
     <div class="header-section">
-        <h1 style="margin: 0; font-size: 3rem;">🚀 CodeX Intelligence Hub</h1>
-        <h2 style="margin: 0.5rem 0; font-weight: normal;">Semantic Search, Multi-Language Translation & AI Code Review</h2>
-        <p style="margin: 0; opacity: 0.9;">Unlock developer productivity with instant tailored snippets from across the global ecosystem</p>
+        <h1 style="margin: 0; font-size: 2.5rem; color: inherit;">🚀 CodeX Intelligence Hub</h1>
+        <h2 style="margin: 0.5rem 0; font-weight: 500; color: inherit; opacity: 0.8;">Semantic Search, Multi-Language Translation & AI Code Review</h2>
+        <p style="margin: 0; opacity: 0.7; color: inherit;">Unlock developer productivity with instant tailored snippets from across the global ecosystem</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -3860,49 +3947,63 @@ def main():
         with col2:
             st.info(f"Target: {language}")
         
+        if 'gen_code_state' not in st.session_state:
+            st.session_state.gen_code_state = {
+                'code': '',
+                'query': '',
+                'difficulty': ''
+            }
+
         if generate_btn:
             with st.spinner(f"🤖 Generating {difficulty_level} {language} code with AI (GitHub + StackOverflow + Dataset)..."):
                 # Use empty results if no snippets found
                 reference_snippets = filtered_results[:3] if filtered_results else []
                 generated_code = generate_code_with_groq(query, reference_snippets, language, difficulty_level, max_tokens, temperature)
+                st.session_state.gen_code_state['code'] = generated_code.strip()
+                st.session_state.gen_code_state['query'] = query
                 
-            # Extract difficulty if present
-            difficulty_match = re.search(r'\[DIFFICULTY:\s*(\w+)\]', generated_code)
-            if difficulty_match:
-                difficulty = difficulty_match.group(1)
-                generated_code = re.sub(r'\[DIFFICULTY:\s*\w+\]\s*', '', generated_code)
-                
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"**Generated {language} Solution:**")
-                with col2:
-                    # Color code difficulty
-                    diff_colors = {'Beginner': 'green', 'Intermediate': 'orange', 'Advanced': 'red'}
-                    color = diff_colors.get(difficulty, 'blue')
-                    st.markdown(f"**Difficulty:** <span style='color:{color}'>{difficulty}</span>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"**Generated {language} Solution:**")
+                # Extract difficulty if present
+                difficulty_match = re.search(r'\[DIFFICULTY:\s*(\w+)\]', generated_code)
+                if difficulty_match:
+                    st.session_state.gen_code_state['difficulty'] = difficulty_match.group(1)
+                    st.session_state.gen_code_state['code'] = re.sub(r'\[DIFFICULTY:\s*\w+\]\s*', '', generated_code).strip()
+                else:
+                    st.session_state.gen_code_state['difficulty'] = difficulty_level
+
+        # Display generated code if search query matches and code exists
+        if st.session_state.gen_code_state['code'] and st.session_state.gen_code_state['query'] == query:
+            generated_code = st.session_state.gen_code_state['code']
+            difficulty = st.session_state.gen_code_state['difficulty']
             
-            code_lang = {'Python': 'python', 'C++': 'cpp', 'Java': 'java'}.get(language, 'python')
-            st.code(generated_code.strip(), language=code_lang)
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f"**Generated {language} Solution:**")
+            with col2:
+                # Color code difficulty
+                diff_colors = {'Beginner': 'green', 'Intermediate': 'orange', 'Advanced': 'red'}
+                color = diff_colors.get(difficulty, 'blue')
+                st.markdown(f"**Difficulty:** <span style='color:{color}'>{difficulty}</span>", unsafe_allow_html=True)
+            
+            code_lang = {'Python': 'python', 'C++': 'cpp', 'Java': 'java', 'JavaScript': 'javascript'}.get(language, 'python')
+            st.code(generated_code, language=code_lang)
             
             # Show complexity analysis
             st.subheader("📊 Code Complexity Analysis")
-            show_complexity_graphs(generated_code.strip(), difficulty_level, language)
+            show_complexity_graphs(generated_code, difficulty, language)
             
             # Auto-save if enabled
             if auto_save:
-                difficulty = difficulty_match.group(1) if difficulty_match else difficulty_level
-                if save_generated_code_to_csv(query, generated_code.strip(), language, difficulty):
+                if save_generated_code_to_csv(query, generated_code, language, difficulty):
                     st.success(f"✅ Auto-saved to {language} dataset & embeddings updated!")
                     st.session_state.df = load_data()
+                    # Clear state after auto-save to avoid double save message
+                    st.session_state.gen_code_state['query'] = ""
             
             # Manual save, copy, gist, bookmark buttons
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 if not auto_save and st.button("💾 Save to Dataset", key="save_generated"):
-                    difficulty = difficulty_match.group(1) if difficulty_match else difficulty_level
-                    if save_generated_code_to_csv(query, generated_code.strip(), language, difficulty):
+                    if save_generated_code_to_csv(query, generated_code, language, difficulty):
                         st.success(f"Code saved to {language} dataset & embeddings updated!")
                         st.session_state.df = load_data()
                         st.rerun()
@@ -3911,14 +4012,14 @@ def main():
                     st.success("Generated code ready to copy!")
             with col3:
                 if st.button("📤 Export Gist", key="gist_generated"):
-                    url = export_to_gist(generated_code.strip(), query, f"{language.lower()}_solution.py")
+                    url = export_to_gist(generated_code, query, f"{language.lower()}_solution.py")
                     if url.startswith('http'):
                         st.success(f"[View Gist]({url})")
                     else:
                         st.error(url)
             with col4:
                 if st.button("🔖 Bookmark", key="bm_generated"):
-                    add_bookmark(generated_code.strip(), query, language, f"AI Generated - {difficulty_level}")
+                    add_bookmark(generated_code, query, language, f"AI Generated ({difficulty})")
                     st.success("Bookmarked!")
         
         # Show messages about search results
@@ -3950,9 +4051,9 @@ def main():
     st.markdown("---")
     st.markdown(
         """
-        <div style="text-align: center; color: #888; padding: 2rem;">
-            <p><strong>CodeX Intelligence Hub</strong> — Next-Gen AI Development Ecosystem</p>
-            <p style="font-size: 0.8rem; opacity: 0.7;">Powered by Llama-3, Sentence Transformers, FAISS, and Groq Ultra</p>
+        <div style="text-align: center; color: inherit; opacity: 0.6; padding: 2rem;">
+            <p><strong>CodeX Intelligence Hub</strong> - Next-Gen AI Development Ecosystem</p>
+            <p style="font-size: 0.8rem;">Powered by Llama-3, Sentence Transformers, FAISS, and Groq Ultra</p>
         </div>
         """,
         unsafe_allow_html=True
