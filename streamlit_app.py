@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 from streamlit_option_menu import option_menu
 from streamlit_extras.metric_cards import style_metric_cards
 from streamlit_extras.stylable_container import stylable_container
@@ -237,89 +237,81 @@ def fetch_github_code_snippets(query, language=None, max_files=5):
     return items
 
 def fetch_stackoverflow_code_snippets(query=None, tag=None, pagesize=10, max_pages=1):
-    """Fetch code snippets from StackOverflow with ultra-robust multi-phase search"""
+    """Fetch code snippets from StackOverflow with query+tag search"""
+    import html as _html
     base = 'https://api.stackexchange.com/2.3'
     snippets = []
-    q_str = (query or "").strip()
     
-    # ── Search Strategy Pipeline ──
-    # 1. search/advanced with 'q' and 'tagged'
-    # 2. search/advanced with 'intitle' and 'tagged' (broader)
-    # 3. search/advanced with 'q' ONLY (no tag)
-    # 4. search/advanced with 'intitle' ONLY
-    
-    search_attempts = [
-        {'q': q_str, 'tagged': tag},
-        {'intitle': q_str, 'tagged': tag},
-        {'q': q_str},
-        {'intitle': q_str}
-    ]
-    
-    for attempt in search_attempts:
-        if not any(attempt.values()): continue
-        
+    try:
         params = {
             'order': 'desc',
             'sort': 'relevance',
             'site': 'stackoverflow',
-            'pagesize': pagesize,
-            'filter': 'withbody',
-            'answers': 1 # Only questions with at least one answer
+            'pagesize': min(pagesize * 2, 30),
+            'filter': 'withbody'
         }
-        params.update(attempt)
+        
+        if query and query.strip():
+            params['q'] = query.strip()
+        if tag:
+            params['tagged'] = tag
+        
+        if not query and not tag:
+            return snippets
+        
+        r = requests.get(f"{base}/search/advanced", params=params, timeout=10)
+        if r.status_code != 200:
+            return snippets
+        
+        items = r.json().get('items', [])
+        for q in items:
+            if len(snippets) >= pagesize:
+                break
             
-        try:
-            r = requests.get(f"{base}/search/advanced", params=params, timeout=10)
-            if r.status_code == 200:
-                items = r.json().get('items', [])
-                if not items: continue # Try next attempt in pipeline
-                
-                for q in items:
-                    question_id = q['question_id']
-                    # Fetch top-voted answer
-                    ar = requests.get(f"{base}/questions/{question_id}/answers", 
-                                     params={'order':'desc','sort':'votes','site':'stackoverflow','filter':'withbody'}, 
-                                     timeout=10)
-                    if ar.status_code == 200:
-                        answers = ar.json().get('items', [])
-                        for a in answers[:1]:
-                            soup = BeautifulSoup(a.get('body', ''), 'html.parser')
-                            code_blocks = [c.get_text() for c in soup.find_all('code')]
-                            for cb in code_blocks:
-                                if len(cb.strip()) > 30: # Snippet quality threshold
-                                    snippets.append({
-                                        'source':'stackoverflow',
-                                        'title': q.get('title'),
-                                        'link': q.get('link'),
-                                        'content': cb.strip()
-                                    })
-                                    if len(snippets) >= pagesize: return snippets
-                
-                if snippets: return snippets # Found something!
-        except Exception:
-            continue
+            ar = requests.get(f"{base}/questions/{q['question_id']}/answers",
+                             params={'order':'desc','sort':'votes','site':'stackoverflow','filter':'withbody'},
+                             timeout=10)
             
-    # Final Fallback: if keywords failed, try just the tag with top votes
-    if not snippets and tag:
-        try:
-            r = requests.get(f"{base}/questions", params={
-                'order': 'desc', 'sort': 'votes', 'tagged': tag, 
-                'site': 'stackoverflow', 'pagesize': 5, 'filter': 'withbody'
-            }, timeout=10)
-            if r.status_code == 200:
-                for q in r.json().get('items', []):
-                    # (Simplified answer fetch logic as above...)
-                    ar = requests.get(f"{base}/questions/{q['question_id']}/answers", 
-                                     params={'order':'desc','sort':'votes','site':'stackoverflow','filter':'withbody'}, 
-                                     timeout=10)
-                    if ar.status_code == 200:
-                        for a in ar.json().get('items', []):
-                            soup = BeautifulSoup(a.get('body', ''), 'html.parser')
-                            for cb in [c.get_text() for c in soup.find_all('code') if len(c.get_text()) > 30]:
-                                snippets.append({'source':'stackoverflow', 'title': q['title'], 'link': q['link'], 'content': cb.strip()})
-                                if len(snippets) >= pagesize: return snippets
-        except Exception: pass
-
+            if ar.status_code == 200:
+                for a in ar.json().get('items', [])[:3]:  # Check top 3 answers
+                    if len(snippets) >= pagesize:
+                        break
+                    
+                    soup = BeautifulSoup(a.get('body', ''), 'html.parser')
+                    
+                    # Extract ALL <pre><code> blocks from this answer
+                    found_in_answer = False
+                    for pre in soup.find_all('pre'):
+                        code_block = pre.find('code')
+                        if code_block:
+                            code_text = _html.unescape(code_block.get_text()).strip()
+                            if len(code_text) >= 40 or code_text.count('\n') >= 1:
+                                snippets.append({
+                                    'source': 'stackoverflow',
+                                    'title': q.get('title'),
+                                    'link': q.get('link'),
+                                    'content': code_text
+                                })
+                                found_in_answer = True
+                                if len(snippets) >= pagesize:
+                                    break
+                    
+                    # If no <pre><code>, try standalone <code> tags
+                    if not found_in_answer:
+                        for code in soup.find_all('code'):
+                            code_text = _html.unescape(code.get_text()).strip()
+                            if len(code_text) >= 40 or code_text.count('\n') >= 1:
+                                snippets.append({
+                                    'source': 'stackoverflow',
+                                    'title': q.get('title'),
+                                    'link': q.get('link'),
+                                    'content': code_text
+                                })
+                                if len(snippets) >= pagesize:
+                                    break
+    except Exception:
+        pass
+    
     return snippets
 
 def get_search_query_from_code(code, language, groq_client):
@@ -1099,7 +1091,7 @@ def show_bug_intelligence_mode():
                         for i, ctx in enumerate(la['contexts'][:3], 1):
                             with st.container():
                                 st.markdown(f"**Pattern {i}:**")
-                                st.code(ctx[:200], language='python')  # Show first 200 chars
+                                st.code(ctx[:1200], language='python')  # Show more context
                     else:
                         st.caption("⚠ No similar patterns found")
                     st.markdown("---")
@@ -1289,7 +1281,7 @@ def show_bug_intelligence_mode():
                                 st.markdown(f"**Evidence #{i}** (Source: {ctx.get('source', 'Knowledge Node').title()})")
                                 st.markdown(f"""
                                 <div style="background: white; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; line-height: 1.5; color: #334155; white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto;">
-                                {ctx.get('text', '')[:800]}...
+                                {ctx.get('text', '')[:2000]}...
                                 </div>
                                 """, unsafe_allow_html=True)
     
@@ -2396,6 +2388,36 @@ Respond ONLY with the optimized code in a markdown code block. No explanations."
         else:
             st.info("No execution history yet. Run some code to see analytics!")
 
+def extract_smart_title(code, language, default_title):
+    try:
+        import re as _re
+        def clean_name(name):
+            # Convert camelCase/PascalCase/snake_case to Space Separated Title Case
+            s1 = _re.sub('(.)([A-Z][a-z]+)', r'\1 \2', name)
+            return _re.sub('([a-z0-9])([A-Z])', r'\1 \2', s1).replace('_', ' ').strip().title()
+
+        if language == 'cpp':
+            m = _re.search(r'(?:class|struct)\s+(\w+)', code)
+            if m:
+                name = m.group(1).replace('Solution', '').strip()
+                if name: return clean_name(name)
+            # Match functions with various return types including pointers and templates
+            m = _re.search(r'\b(?:[a-zA-Z_]\w*(?:\s*[*&])*)\s+([a-zA-Z_]\w*)\s*\([^)]*\)\s*(?:const)?\s*[\{;]', code)
+            if m and m.group(1) not in ('main', 'Main'):
+                return clean_name(m.group(1))
+        elif language == 'java':
+            m = _re.search(r'public\s+class\s+(\w+)', code)
+            if m:
+                name = m.group(1).replace('Solution', '').strip()
+                if name: return clean_name(name)
+            # Match methods with visibility modifiers and complex types
+            m = _re.search(r'(?:public|private|protected|static|\s)\s+[\w<>[\]]+\s+([a-zA-Z_]\w*)\s*\(', code)
+            if m and m.group(1) not in ('main', 'Main'):
+                return clean_name(m.group(1))
+    except:
+        pass
+    return default_title
+
 @st.cache_data
 def load_data():
     """Load and preprocess the dataset"""
@@ -2435,7 +2457,7 @@ def load_data():
 
                     all_snippets.append({
                         'source': 'cpp_csv',
-                        'title': f'C++ Solution {idx}',
+                        'title': extract_smart_title(row['Answer'], 'cpp', f'C++ Solution {idx}'),
                         'content': row['Answer'],
                         'language': 'cpp',
                         'difficulty': diff,
@@ -2452,7 +2474,7 @@ def load_data():
                 if pd.notna(row.get('content')):
                     all_snippets.append({
                         'source': 'java_csv',
-                        'title': row.get('title', f'Java Solution {idx}'),
+                        'title': extract_smart_title(row['content'], 'java', row.get('title', f'Java Solution {idx}')),
                         'content': row['content'],
                         'language': 'java',
                         'difficulty': row.get('difficulty', 'Unknown'),
@@ -2588,21 +2610,100 @@ def retrieve_similar_snippets(query_text, top_k=5, language_filter=None):
     if st.session_state.model is None or st.session_state.index is None:
         return []
 
+    # ── Quality helpers ──────────────────────────────────────────────────
+    def _is_repl(code: str) -> bool:
+        return bool(re.search(r'^\s*>>>', str(code), re.MULTILINE))
+
+    def _is_trivial(code: str) -> bool:
+        text = str(code)
+        real_chars = len(re.sub(r'\s+', '', text))
+        real_lines = [l for l in text.splitlines()
+                      if l.strip() and not l.strip().startswith(('#', '//', '/*', '*', '>>>'))]
+        return real_chars < 80 or len(real_lines) < 4
+    
+    def _is_just_definition(code: str) -> bool:
+        """Check if code is just class/function definition without implementation"""
+        lines = [l.strip() for l in str(code).splitlines() if l.strip()]
+        if not lines:
+            return True
+        
+        # Count definition lines vs implementation lines
+        def_count = 0
+        impl_count = 0
+        
+        for line in lines:
+            # Skip comments
+            if line.startswith(('#', '//', '/*', '*')):
+                continue
+            # Definition patterns
+            if re.match(r'^(def|class|function|public|private|protected|static)\s+\w+', line):
+                def_count += 1
+            # Implementation indicators (assignments, returns, calls, etc)
+            elif any(pattern in line for pattern in ['=', 'return', 'print', 'console.', 'System.', 'std::', 'if ', 'for ', 'while ']):
+                impl_count += 1
+        
+        # If mostly definitions with minimal implementation, reject
+        return def_count > 0 and impl_count < 3
+    
+    def _is_off_topic(code: str, query: str) -> bool:
+        """Check if code is off-topic for the query (e.g., linked list when searching for array sort)"""
+        code_lower = str(code).lower()
+        query_lower = query.lower()
+        
+        # If query mentions specific data structure, reject code using different structure
+        if 'array' in query_lower or 'list' in query_lower:
+            # Reject if code heavily uses linked list patterns
+            if code_lower.count('listnode') > 2 or code_lower.count('.next') > 3:
+                return True
+        
+        # If searching for basic algorithm, reject overly complex variations
+        if any(term in query_lower for term in ['merge sort', 'quick sort', 'bubble sort', 'binary search']):
+            # Reject if it's a complex problem using the algorithm (not the algorithm itself)
+            if any(term in code_lower for term in ['listnode', 'treenode', 'reverse pairs', 'count inversions']):
+                return True
+        
+        return False
+    # ─────────────────────────────────────────────────────────────────────
+
     try:
         q_emb = st.session_state.model.encode([query_text])
         q_emb = q_emb / np.linalg.norm(q_emb, axis=1, keepdims=True)
-        D, I = st.session_state.index.search(q_emb.astype('float32'), top_k * 3)  # Get more to filter
+        D, I = st.session_state.index.search(q_emb.astype('float32'), top_k * 5)
+
+        # Normalize scores to 0-100 range with better distribution
+        if len(D[0]) > 0:
+            min_score = D[0].min()
+            max_score = D[0].max()
+            score_range = max_score - min_score
+            if score_range > 0:
+                normalized_scores = ((D[0] - min_score) / score_range) * 100
+            else:
+                normalized_scores = D[0] * 100
+        else:
+            normalized_scores = D[0] * 100
 
         results = []
-        for idx, score in zip(I[0], D[0]):
-            if idx < len(st.session_state.df):
-                row = st.session_state.df.loc[idx]
+        for idx, (orig_score, norm_score) in enumerate(zip(D[0], normalized_scores)):
+            actual_idx = I[0][idx]
+            if actual_idx < len(st.session_state.df):
+                row = st.session_state.df.loc[actual_idx]
                 if language_filter and row['language'] != language_filter:
                     continue
+                code = str(row['code'])
+                # ── quality guards ──────────────────────────────────────
+                if _is_repl(code):
+                    continue
+                if _is_trivial(code):
+                    continue
+                if _is_just_definition(code):
+                    continue
+                if float(orig_score) < 0.30:          # discard very low-relevance hits
+                    continue
+                # ───────────────────────────────────────────────────────
                 results.append({
-                    'idx': int(idx),
-                    'score': float(score),
-                    'code': row['code'],
+                    'idx': int(actual_idx),
+                    'score': float(norm_score),  # Use normalized 0-100 score
+                    'code': code,
                     'title': row['title'],
                     'difficulty': row['difficulty'],
                     'num_of_lines': row['num_of_lines'],
@@ -2610,6 +2711,7 @@ def retrieve_similar_snippets(query_text, top_k=5, language_filter=None):
                     'meta': row.to_dict()
                 })
                 if len(results) >= top_k:
+
                     break
         return results
     except Exception as e:
@@ -2674,9 +2776,32 @@ def save_generated_code_to_csv(problem_statement, generated_code, language, diff
         # Read existing data
         df = pd.read_csv(csv_file) if os.path.exists(csv_file) else pd.DataFrame()
         
+        # ── Deduplication Guard ──────────────────────────────────────────
+        # Compute a normalised fingerprint of the incoming code
+        import hashlib as _hl
+        code_normalized = re.sub(r'\s+', '', generated_code)           # strip all whitespace
+        code_fingerprint = _hl.md5(code_normalized.encode()).hexdigest()
+
+        # Find the code column for the current language
+        _code_col = {
+            'Python': 'python_solutions',
+            'C++': 'Answer',
+            'Java': 'content',
+            'JavaScript': 'content'
+        }.get(language, 'python_solutions')
+
+        if _code_col in df.columns:
+            existing_fingerprints = df[_code_col].dropna().apply(
+                lambda c: _hl.md5(re.sub(r'\s+', '', str(c)).encode()).hexdigest()
+            )
+            if code_fingerprint in existing_fingerprints.values:
+                return True   # Already stored – skip silently
+        # ─────────────────────────────────────────────────────────────────
+
         # Add new row
         new_df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         new_df.to_csv(csv_file, index=False)
+
         
         # Auto-update embeddings and FAISS index
         if st.session_state.model is not None:
@@ -2846,6 +2971,51 @@ def retrain_model():
     except Exception as e:
         st.error(f"Retrain failed: {e}")
         return False
+
+def generate_ai_explanation(query, retrieved_snippets, github_snippets, so_snippets, language):
+    """Generate comprehensive AI explanation based on retrieved code snippets"""
+    groq = get_groq_client()
+    if not groq:
+        return None
+    
+    context = f"Query: {query}\n\n"
+    context += "Dataset Snippets:\n"
+    for i, s in enumerate(retrieved_snippets[:2], 1):
+        context += f"{i}. {s['title']} (score: {s['score']:.2f})\n{s['code'][:500]}\n\n"
+    
+    if github_snippets:
+        context += "GitHub Examples:\n"
+        for i, g in enumerate(github_snippets[:2], 1):
+            context += f"{i}. {g.get('repo', 'GitHub')}\n{g.get('content', '')[:500]}\n\n"
+    
+    if so_snippets:
+        context += "StackOverflow Solutions:\n"
+        for i, s in enumerate(so_snippets[:2], 1):
+            context += f"{i}. {s.get('title', 'SO')}\n{s.get('content', '')[:500]}\n\n"
+    
+    prompt = f"""You are an expert {language} developer. Based on the code snippets below, provide a comprehensive professional response.
+
+{context}
+
+Provide:
+1. **Overview**: Brief explanation of what this code does
+2. **Best Approach**: Which snippet/approach is best and why
+3. **Key Concepts**: Important concepts demonstrated
+4. **Usage Example**: How to use this code
+5. **Common Pitfalls**: What to watch out for
+
+Be concise but professional. Format with markdown."""
+    
+    try:
+        resp = groq.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=800
+        )
+        return resp.choices[0].message.content
+    except:
+        return None
 
 def generate_code_with_groq(problem_statement, retrieved_snippets, language, difficulty="Intermediate", max_tokens=512, temperature=0.2):
     """Generate code using Groq with GitHub/StackOverflow augmentation for reliable code"""
@@ -4137,6 +4307,35 @@ def main():
     
     # Search results
     if search_triggered and query:
+        with st.spinner("🔍 Searching dataset, GitHub, and StackOverflow..."):
+            # Retrieve from dataset
+            results = retrieve_similar_snippets(query, top_k=num_results, language_filter=lang_map.get(language, "python"))
+            
+            # Fetch from GitHub
+            github_snippets = []
+            try:
+                github_snippets = fetch_github_code_snippets(query, language=language.lower(), max_files=3)
+            except:
+                pass
+            
+            # Fetch from StackOverflow
+            so_snippets = []
+            try:
+                so_snippets = fetch_stackoverflow_code_snippets(query=query, tag=language.lower(), pagesize=5)
+            except:
+                pass
+        
+        # Generate comprehensive AI explanation
+        if results or github_snippets or so_snippets:
+            with st.spinner("🤖 Generating comprehensive professional response..."):
+                ai_explanation = generate_ai_explanation(query, results, github_snippets, so_snippets, language)
+            
+            if ai_explanation:
+                st.markdown("---")
+                st.markdown("### 🎯 Professional Analysis")
+                st.markdown(ai_explanation)
+                st.markdown("---")
+        
         st.markdown(f"**Showing results for \"{query}\" in {language}**")
         
         # Retrieve similar snippets from dataset
@@ -4145,11 +4344,12 @@ def main():
             selected_lang = lang_map.get(language, "python")
             results = retrieve_similar_snippets(query, top_k=num_results, language_filter=selected_lang)
             
-            # Fetch live GitHub snippets (reduced to 1 result, faster)
+            # Fetch live GitHub snippets (scaled with num_results)
             github_results = []
             try:
-                github_snippets = fetch_github_code_snippets(query, language=selected_lang, max_files=1)
-                for gs in github_snippets[:1]:  # Only take first result
+                gh_count = max(1, num_results // 2)  # Scale: 1-5 results based on slider
+                github_snippets = fetch_github_code_snippets(query, language=selected_lang, max_files=gh_count)
+                for gs in github_snippets[:gh_count]:
                     code_content = gs['content'][:1500]
                     github_results.append({
                         'idx': -1,
@@ -4162,31 +4362,44 @@ def main():
                         'source': 'github',
                         'url': gs.get('url', '')
                     })
-                    # Auto-save to dataset and update embeddings
-                    save_generated_code_to_csv(query, gs['content'], language, 'Unknown')
+                    # Only auto-save GitHub snippets that appear relevant to the query
+                    # (repo name or path contains a keyword from the query)
+                    query_keywords = set(query.lower().split())
+                    repo_path = (gs.get('repo', '') + gs.get('path', '')).lower()
+                    if any(kw in repo_path for kw in query_keywords if len(kw) > 3):
+                        save_generated_code_to_csv(query, gs['content'], language, 'Unknown')
             except Exception as e:
                 pass
             
-            # Fetch StackOverflow snippets (reduced, faster)
+            # Fetch StackOverflow snippets (scaled with num_results)
             so_results = []
             try:
                 tag_map = {'python': 'python', 'cpp': 'c++', 'java': 'java', 'javascript': 'javascript'}
-                so_snippets = fetch_stackoverflow_code_snippets(tag=tag_map.get(selected_lang, 'python'), pagesize=10, max_pages=1)
-                for sos in so_snippets[:2]:  # Only take first 2
-                    if len(sos['content']) > 50:  # Skip very short snippets
-                        so_results.append({
-                            'idx': -1,
-                            'score': 0.80,
-                            'code': sos['content'][:1500],
-                            'title': f"StackOverflow: {sos.get('title', 'Solution')[:50]}",
-                            'difficulty': 'Unknown',
-                            'num_of_lines': len(sos['content'].split('\n')),
-                            'language': selected_lang,
-                            'source': 'stackoverflow',
-                            'url': sos.get('link', '')
-                        })
-                        # Auto-save to dataset and update embeddings
-                        save_generated_code_to_csv(query, sos['content'], language, 'Unknown')
+                so_count = max(2, num_results)  # Scale: 2-10 results based on slider
+                so_snippets = fetch_stackoverflow_code_snippets(query=query, tag=tag_map.get(selected_lang, 'python'), pagesize=so_count, max_pages=1)
+                query_keywords = set(query.lower().split())
+                for sos in so_snippets[:5]:  # Check more candidates but filter strictly
+                    if len(sos['content']) < 50:
+                        continue
+                    # Only include SO snippet if its title overlaps with the search query
+                    so_title_words = set(sos.get('title', '').lower().split())
+                    overlap = query_keywords & so_title_words
+                    meaningful_overlap = [w for w in overlap if len(w) > 3]
+                    if not meaningful_overlap:
+                        continue  # Skip off-topic SO snippets entirely
+                    so_results.append({
+                        'idx': -1,
+                        'score': 0.78,
+                        'code': sos['content'][:1500],
+                        'title': f"StackOverflow: {sos.get('title', 'Solution')[:50]}",
+                        'difficulty': 'Unknown',
+                        'num_of_lines': len(sos['content'].split('\n')),
+                        'language': selected_lang,
+                        'source': 'stackoverflow',
+                        'url': sos.get('link', '')
+                    })
+                    # Save only on-topic SO snippets
+                    save_generated_code_to_csv(query, sos['content'], language, 'Unknown')
             except Exception as e:
                 pass
             
@@ -4194,8 +4407,21 @@ def main():
             all_results = results + github_results + so_results
             if len(github_results) + len(so_results) > 0:
                 st.session_state.df = load_data()  # Reload dataset with new snippets
-        
+
+            # ── Deduplication of displayed results ───────────────────────
+            import hashlib as _hl
+            seen_fingerprints = set()
+            deduped_results = []
+            for r in all_results:
+                _fp = _hl.md5(re.sub(r'\s+', '', str(r.get('code', ''))).encode()).hexdigest()
+                if _fp not in seen_fingerprints:
+                    seen_fingerprints.add(_fp)
+                    deduped_results.append(r)
+            all_results = deduped_results
+            # ─────────────────────────────────────────────────────────────
+
         if all_results:
+
             # Filter by similarity threshold
             filtered_results = [r for r in all_results if r['score'] >= similarity_threshold]
             
